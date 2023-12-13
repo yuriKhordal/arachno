@@ -1,0 +1,225 @@
+:root {
+	--theme-light-bg: lightblue; /* Light Background colour */
+	--theme-light-fg: #000000; /* Light Background colour */
+	--theme-light-outline: darkcyan; /* Light outline colour */
+	--theme-light-angy: cyan; /* Light "I'm angy" button colour */
+	--theme-light-hover-color: rgba(0, 128, 128, 0.25); /* Light hover color change */
+	--theme-light-input-bg: rgb(192, 255, 255); /* Light input background colour */
+	--theme-light-button-bg: rgb(160, 255, 255); /* Light buttons background colour */
+
+	--theme-matrix-bg: #101010; /* Matrix Background colour */
+	--theme-matrix-fg: #00FF00; /* Matrix Background colour */
+	--theme-matrix-hover-color: rgba(0, 64, 0, 0.25); /* Matrix hover color change */
+
+	--theme-dark-bg: #101010; /* Dark Background colour */
+	--theme-dark-fg: #eeeeee; /* Dark Background colour */
+
+	--theme-bg: var(--theme-light-bg); /* Background colour */
+	--theme-fg: var(--theme-light-fg); /* Foreground colour */
+	--theme-outline: var(--theme-light-outline); /* Outline colour */
+	--theme-angy: var(--theme-light-angy); /* I'm angy" button colour */
+	--theme-hover-color: var(--theme-light-hover-color); /* Hover color change */
+	--theme-input-bg: var(--theme-light-input-bg); /* Input background colour */
+	--theme-button-bg: var(--theme-light-button-bg); /* Buttons background colour */
+
+	--card-width: 50%;
+	--card-padding: 5rem;
+	--pfp-size: 48px;
+	--pfp-offset: 48px;
+	--hapy-margin: 1em;
+	--hapy-size: 2.5em;
+}
+
+@media (orientation: landscape), (width > 1200px) {
+	:root {
+		--card-width: 50%;
+		--card-padding: 5rem;
+	}
+}
+@media (600px < width <= 1200px) {
+	:root {
+		--card-width: 66%;
+		--card-padding: 4rem;
+	}
+}
+@media (width <= 600px) {
+	:root {
+		--card-width: 75%;
+		--card-padding: 2rem;
+		--pfp-offset: 0;
+		--hapy-margin: 0.5em;
+		--hapy-size: 2em;
+	}
+}
+
+html{
+	background-color: var(--theme-bg);
+	color: var(--theme-fg);
+}
+
+header #logo {
+	height: fit-content;
+	width: fit-content;
+	padding: auto;
+	margin: auto;
+	font-style: italic;
+	/*outline: solid 3px gold;*/
+	/*border-radius: 1rem;*/
+}
+
+header #logo a {
+	appearance: none;
+	text-decoration: none;
+	color: var(--theme-fg);
+}
+
+header #logo img {
+	width: 96px;
+	vertical-align: middle;
+}
+
+/* header #theme-chooser {
+	width: fit-content;
+	position: absolute;
+	top: 0;
+	right: 3rem;
+}
+header #theme-chooser select {
+	appearance: none;
+	background-color: var(--theme-fg);
+	color: var(--theme-bg);
+	border-radius: 10px;
+	border: none;
+	padding: 0 1rem;
+} */
+
+main.posts-list {
+	display: flex;
+	flex-direction: column;
+	width: var(--card-width);
+	margin: auto;
+	row-gap: 2rem;
+	column-gap: 2rem;
+}
+
+article.post {
+	min-height: calc(2 * var(--hapy-size) + 2.5 * var(--hapy-margin));
+	position: relative;
+	border: solid 2px var(--theme-outline);
+	border-radius: 2rem;
+	padding: 0 var(--card-padding);
+}
+
+article.post img.pfp {
+	width: var(--pfp-size);
+	vertical-align: top;
+	position: relative;
+	right: var(--pfp-offset);
+	top: var(--pfp-offset);
+	margin-right: calc(-1 * var(--pfp-offset));
+	margin-top: calc(-1 * var(--pfp-offset));
+}
+
+.hapy, .angy {
+	position: absolute;
+	right: var(--hapy-margin);
+	border-radius: 50%;
+	border: 2px solid;
+	width: var(--hapy-size);
+	height: var(--hapy-size);
+	line-height: var(--hapy-size);
+	text-align: center;
+	z-index: 1;
+}
+.hapy {
+	top: var(--hapy-margin);
+}
+.angy {
+	top: calc(var(--hapy-size) + 1.5 * var(--hapy-margin));
+}
+
+.hapy:hover, .angy:hover, .hapy.clicked, .angy.clicked {
+	background-color: var(--theme-hover-color);
+}
+
+#btn_angy {
+	appearance: none;
+	text-decoration: none;
+
+	display: block;
+	width: fit-content;
+	margin: auto;
+	font-size: 2rem;
+	padding: 0.5rem 2rem;
+	background-color: var(--theme-angy);
+	color: var(--theme-fg);
+	border: 2px solid var(--theme-outline);
+	border-radius: 1rem;
+}
+
+#div_angy {
+	width: 100%;
+	position: fixed;
+	bottom: 5px;
+	left: 0;
+}
+
+form#newpost {
+	display: flex;
+	flex-direction: column;
+	width: var(--card-width);
+	margin: auto;
+	border: solid 2px var(--theme-outline);
+	border-radius: 2rem;
+	padding: calc(0.5 * var(--card-padding));
+	padding-top: 0;
+}
+
+form#newpost textarea {
+	width: 100%;
+	min-height: 10em;
+	resize: vertical;
+	font-size: 1.5rem;
+	padding-left: 0.5rem;
+	padding-right: 0.5rem;
+	margin-bottom: 0.5rem;
+}
+
+form#newpost input[type="text"] {
+	font-size: 1.5rem;
+	padding-left: 0.5rem;
+	padding-right: 0.5rem;
+	margin-bottom: 2rem;
+}
+
+form#newpost input[type="submit"] {
+	width: fit-content;
+	font-size: 1.5em;
+	padding-left: 1rem;
+	padding-right: 1rem;
+}
+
+textarea {
+	appearance: none;
+	border-radius: 1rem;
+	border: solid 2px var(--theme-outline);
+	background-color: var(--theme-input-bg);
+}
+
+input[type="text"] {
+	appearance: none;
+	border-radius: 0.5rem;
+	border: solid 1px var(--theme-outline);
+	background-color: var(--theme-input-bg);
+}
+
+button, input[type="submit"] {
+	appearance: none;
+	border: solid 2px var(--theme-outline);
+	border-radius: 1em;
+	background-color: var(--theme-input-bg);
+}
+
+button:hover, input[type="submit"]:hover {
+	background-color: var(--theme-button-bg);
+}
