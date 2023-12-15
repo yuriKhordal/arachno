@@ -17,19 +17,11 @@
 #include "server.h"
 #include "rest.h"
 #include "status.h"
+#include "conf.h"
 #include "misc.h"
 
 magic_t magicfd;
 int sockfd;
-
-// Configurations:
-
-struct in_addr cfg_local_ip;
-in_port_t cfg_local_port;
-char *cfg_default_index = "index.html";
-size_t cfg_default_index_len = sizeof("index.html") - 1;
-char *cfg_base_path = "html/";
-size_t cfg_base_path_len = sizeof("html/") - 1;
 
 _Atomic int stop = 0;
 void onCtrlC(int signal) {
@@ -38,9 +30,9 @@ void onCtrlC(int signal) {
 }
 
 int main(int argc, char *argv[]) {
-	// TO BE REPLACED WITH CONFIGS:
-	cfg_local_ip.s_addr = htonl(0);
-	cfg_local_port = htons(80);
+	// Don't exit becuase loads defaults.
+	if (loadConfigs() == -1)
+		perror_line();
 
 	// Init libmagic (MIME types db).
 	magicfd = magic_open(MAGIC_MIME_TYPE);

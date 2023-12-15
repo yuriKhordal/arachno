@@ -1,5 +1,5 @@
 # ========== Definitions ==========
-BIN = server #Binary Executable
+BIN = arachno #Binary Executable
 HDR = $(wildcard include/*.h) #Header files
 SRC = $(wildcard src/*.c) #Code files
 #OBJ = $(subst src/,obj/,$(SRC:.c=.o)) #Object files
@@ -8,7 +8,7 @@ OBJ = $(SRC:src/%.c=obj/%.o) #Object files
 DEP = $(SRC:src/%.c=deps/%.d) #Object files
 
 CC = gcc
-FLAGS = -Wall -pedantic -lmagic -Iinclude
+FLAGS = -DDEBUG -Wall -pedantic -lmagic -Iinclude
 
 # ========== Rules ==========
 .PHONY: compile mkdir clean run test

@@ -3,7 +3,6 @@
 
 #include<stdio.h>
 #include<magic.h>
-#include<netinet/in.h>
 
 // ==================== Constants/Defines ====================
 
@@ -16,21 +15,6 @@ extern magic_t magicfd;
 
 /**The socket the server is listening on.*/
 extern int sockfd;
-
-// Configurations:
-// NOTE: Will be read from .cfg file in in the future.
-/**Local ip of the server to listen on.*/
-extern struct in_addr cfg_local_ip;
-/**Local port of the server to listen on.*/
-extern in_port_t cfg_local_port;
-/**The default index file for when url path is a dir.*/
-extern char *cfg_default_index;
-/**Length of cfg_default_index.*/
-extern size_t cfg_default_index_len;
-/**The base dir of the website.*/
-extern char *cfg_base_path;
-/**Length of cfg_base_path.*/
-extern size_t cfg_base_path_len;
 
 // ==================== Functions ====================
 

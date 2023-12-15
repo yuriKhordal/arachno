@@ -1,4 +1,6 @@
 .vscode/
-desp/
+deps/
 obj/
+arachno.conf
+arachno
 colours

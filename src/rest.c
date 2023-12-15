@@ -11,6 +11,7 @@
 
 #include "rest.h"
 #include "server.h"
+#include "conf.h"
 #include "status.h"
 #include "misc.h"
 
