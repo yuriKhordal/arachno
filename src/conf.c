@@ -19,6 +19,20 @@ size_t cfg_base_path_len;
 
 int parseline(const char *line, size_t len, const char *path, size_t linecount);
 
+void loadDefaultConfig() {
+	// Load defaults.
+	cfg_local_ip.s_addr = htonl(0);
+#ifdef DEBUG
+	cfg_local_port = htons(8080);
+#else
+	cfg_local_port = htons(80);
+#endif
+	strcpy(cfg_default_index, "index.html");
+	cfg_default_index_len = sizeof("index.html") - 1;
+	strcpy(cfg_base_path, ".");
+	cfg_base_path_len = sizeof(".") - 1;
+}
+
 int loadConfigs() {
 	// Load defaults.
 	cfg_local_ip.s_addr = htonl(0);

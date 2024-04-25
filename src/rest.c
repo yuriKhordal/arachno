@@ -14,6 +14,66 @@
 #include "conf.h"
 #include "status.h"
 #include "misc.h"
+#include "logger.h"
+
+int readRequest(int clientsock, struct http_request *request) {
+	char *buffer = malloc(sizeof(char) * REQUEST_BUFF_SIZE);
+	ssize_t msg_len = recv(clientsock, buffer, REQUEST_BUFF_SIZE, 0);
+
+	if (msg_len == -1) {
+		logf_errno("Failed to recieve message");
+		log_line();
+		return -1;
+	}
+	// printf("%s\n[INFO]%ld Bytes.\n", buffer, msg_len);
+	// handleRequest(clientfd, buffer, REQUEST_BUFF_SIZE);
+	// printf("[INFO] Connection closed.\n");
+
+	// Find the end of the line.
+	size_t i;
+	for (i = 0; buffer[i] != '\n' && i < msg_len; i++);
+	if (i == msg_len) {
+		// No end of line.
+		logf_warning("Invalid request syntax. Dropping connection.");
+		return -1;
+	}
+	size_t linelen = i;
+
+	// Fill request line:
+	// Method
+	for (i = 0; isspace(buffer[i]) && i < linelen; i++);
+	if (i == linelen) {
+		// Only method???
+		logf_warning("Invalid request syntax. Dropping connection.");
+		return -1;
+	}
+	if (strncmp(buffer, "GET", sizeof("GET")) == 0) {
+		request->method = HTTP_GET;
+	} else if (strncmp(buffer, "HEAD", sizeof("HEAD")) == 0) {
+		request->method = HTTP_HEAD;
+	} else if (strncmp(buffer, "POST", sizeof("POST")) == 0) {
+		request->method = HTTP_POST;
+	} else if (strncmp(buffer, "PUT", sizeof("PUT")) == 0) {
+		request->method = HTTP_PUT;
+	} else if (strncmp(buffer, "DELETE", sizeof("DELETE")) == 0) {
+		request->method = HTTP_DELETE;
+	} else if (strncmp(buffer, "CONNECT", sizeof("CONNECT")) == 0) {
+		request->method = HTTP_CONNECT;
+	} else if (strncmp(buffer, "OPTIONS", sizeof("OPTIONS")) == 0) {
+		request->method = HTTP_OPTIONS;
+	} else if (strncmp(buffer, "TRACE", sizeof("TRACE")) == 0) {
+		request->method = HTTP_TRACE;
+	} else if (strncmp(buffer, "PATCH", sizeof("PATCH")) == 0) {
+		request->method = HTTP_PATCH;
+	} else {
+		logf_warning("Unknown method %*s. Dropping connection.", i, buffer);
+		return -1;
+	}
+
+	while (isspace(buffer[i])) i++;
+	// Path
+	
+}
 
 void handleRequest(int clntsock, const char *req, size_t n) {
 	// Get request method.

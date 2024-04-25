@@ -19,9 +19,38 @@
 #include "status.h"
 #include "conf.h"
 #include "misc.h"
+#include "logger.h"
+
+// TODO: Move to other place.
+struct htmlf_format_list {
+	struct kvpair *values;
+	size_t length;
+};
+struct cardf {
+	char *path;
+	struct htmlf_format_list format_list;
+};
+#include<wctype.h>
+union valuef_t {
+	int c;
+	wint_t lc;
+	char *s;
+	wchar_t *ls;
+	long d;
+	unsigned long u;
+	double f;
+	// void *p;
+	struct cardf cardf;
+};
+struct kvpair {
+	char *key;
+	union valuef_t value;
+};
 
 magic_t magicfd;
 int sockfd;
+
+int initArachno();
 
 _Atomic int stop = 0;
 void onCtrlC(int signal) {
@@ -29,64 +58,37 @@ void onCtrlC(int signal) {
 	stop = 1;
 }
 
+struct HttpRequest {
+	char *data;
+	size_t data_length;
+};
+
 int main(int argc, char *argv[]) {
-	// Don't exit becuase loads defaults.
-	if (loadConfigs() == -1)
-		perror_line();
+	if (loadConfigs() == -1) log_line();
+	// Setup logger.
+	setLogger(NULL, LOG_DEBUG, 1);
 
-	// Init libmagic (MIME types db).
-	magicfd = magic_open(MAGIC_MIME_TYPE);
-	if (magicfd == NULL) {
-		perror("[ERROR] Failed opening magic file");
-		perror_line();
-		return EXIT_FAILURE;
-	}
-	if (magic_load(magicfd, NULL) == -1) {
-		fprintf(stderr,
-			"[ERROR] Failed loading MIME database: %s\n", magic_error(magicfd)
-		);
-		perror_line();
-		magic_close(magicfd);
-		return EXIT_FAILURE;
-	}
+	// TODO: Load pre-init method.
 
-	// Create and bind socket and start listening to connections.
-	sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sockfd == -1) {
-		perror("[Error] Failed to open a socket");
-		perror_line();
-		magic_close(magicfd);
+	if (initArachno() == -1) {
+		logf_error("Failed to initialize arachno.");
+		log_line();
 		return EXIT_FAILURE;
 	}
-	printf("[INFO] Socket created succesffully.\n");
-	printf("[DEBUG] Socket fd: %d\n", sockfd);
-	int reuseaddr = 1;
-	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(reuseaddr)) == -1) {
-		perror("[Error] Failed to set the socket as reusable");
-		perror_line();
-		magic_close(magicfd);
-		close(sockfd);
-		return EXIT_FAILURE;
-	}
-	const struct sockaddr_in addr = {AF_INET, cfg_local_port, cfg_local_ip};
-	if (bind(sockfd, (const struct sockaddr*)&addr, sizeof(addr)) == -1) {
-		perror("[Error] Failed to bind the socket");
-		perror_line();
-		magic_close(magicfd);
-		close(sockfd);
-		return EXIT_FAILURE;
-	}
-	printf("[INFO] Socket bound to address %s:%d succesffully.\n", inet_ntoa(cfg_local_ip), ntohs(cfg_local_port));
+	
+	// TODO: Load post-init method.
+
+	// Start listening to requests.
 	if (listen(sockfd, LISTEN_BACKLOG) == -1) {
-		perror("[Error] Error while trying to start listening on socket");
-		perror_line();
+		logf_errno("Error while trying to start listening on socket");
+		log_line();
 		magic_close(magicfd);
 		close(sockfd);
 		return EXIT_FAILURE;
 	}
-	printf("[INFO] Listening mode initiated. Accepting connections.\n");
+	logf_info("Listening mode initiated. Accepting connections.\n");
 
-	const struct sigaction act = {.sa_handler=onCtrlC};
+	struct sigaction act = { .sa_handler = onCtrlC };
 	sigaction(SIGINT, &act, NULL);
 
 	// Start accepting connections.
@@ -95,8 +97,8 @@ int main(int argc, char *argv[]) {
 		socklen_t socklen;
 		int clientfd = accept(sockfd, &clientaddr, &socklen);
 		if (clientfd == -1) {
-			perror("[WARN] Failed connection from client");
-			perror_line();
+			logf_errno("Failed connection from client");
+			log_line();
 			continue;
 		}
 
@@ -121,7 +123,7 @@ int main(int argc, char *argv[]) {
 		// // Child process:
 			
 
-		printf("[INFO] Accepting connection from %s:%d. Data:\n",
+		logf_debug("Accepting connection from %s:%d. Data:\n",
 			inet_ntoa(clientaddr.sin_addr), clientaddr.sin_port
 		);
 		char buffer[REQUEST_BUFF_SIZE];
@@ -139,7 +141,7 @@ int main(int argc, char *argv[]) {
 
 		//Is this needed?? (The if, not the close)
 		if (close(clientfd) == -1) {
-			perror("[Error] close() failed???? Info");
+			logf_errno("close() failed???? Info");
 		}
 		
 		// if (pid == 0) return EXIT_SUCCESS; // Child
@@ -147,11 +149,60 @@ int main(int argc, char *argv[]) {
 
 	// Destroy/Free resources before exit
 	if (close(sockfd) == -1) {
-		perror("[Error] close() failed???? Info");
-		perror_line();
+		logf_errno("[Error] close() failed???? Info");
+		log_line();
 	}
 	magic_close(magicfd);
 	return EXIT_SUCCESS;
+}
+
+int initArachno() {
+	const int FAIL = -1, SUCCESS = 0;
+
+	// Init libmagic (MIME types db).
+	magicfd = magic_open(MAGIC_MIME_TYPE);
+	if (magicfd == NULL) {
+		logf_errno("[ERROR] Failed opening magic file");
+		log_line();
+		return FAIL;
+	}
+	if (magic_load(magicfd, NULL) == -1) {
+		logf_error("Failed loading MIME database: %s\n", magic_error(magicfd));
+		log_line();
+		magic_close(magicfd);
+		return FAIL;
+	}
+
+	// Create and bind a network socket.
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd == -1) {
+		logf_errno("Failed to open a socket");
+		log_line();
+		magic_close(magicfd);
+		return FAIL;
+	}
+	logf_info("Socket created succesffully.\n");
+	logf_debug("Socket fd: %d\n", sockfd);
+
+	int reuseaddr = 1;
+	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(reuseaddr)) == -1) {
+		logf_errno("Failed to set the socket as reusable");
+		log_line();
+		magic_close(magicfd);
+		close(sockfd);
+		return FAIL;
+	}
+
+	const struct sockaddr_in addr = {AF_INET, cfg_local_port, cfg_local_ip};
+	if (bind(sockfd, (const struct sockaddr*)&addr, sizeof(addr)) == -1) {
+		logf_errno("Failed to bind the socket");
+		log_line();
+		magic_close(magicfd);
+		close(sockfd);
+		return FAIL;
+	}
+	logf_info("Socket bound to address %s:%d succesffully.\n", inet_ntoa(cfg_local_ip), ntohs(cfg_local_port));
+	return SUCCESS;
 }
 
 // TODO: If file doesn't exist, still return path.

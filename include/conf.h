@@ -65,4 +65,7 @@ int loadConfigs();
 */
 int loadConfig(const char *path);
 
+/** Set all the configuration options to their default values. */
+void loadDefaultConfig();
+
 #endif
