@@ -71,7 +71,7 @@ int main(int argc, char *argv[]) {
 	// TODO: Load pre-init method.
 
 	if (initArachno() == -1) {
-		logf_error("Failed to initialize arachno.");
+		logf_error("Failed to initialize arachno.\n");
 		log_line();
 		return EXIT_FAILURE;
 	}
@@ -95,7 +95,7 @@ int main(int argc, char *argv[]) {
 	while (!stop) {
 		struct sockaddr_in clientaddr;
 		socklen_t socklen;
-		int clientfd = accept(sockfd, &clientaddr, &socklen);
+		int clientfd = accept(sockfd, (struct sockaddr *)&clientaddr, &socklen);
 		if (clientfd == -1) {
 			logf_errno("Failed connection from client");
 			log_line();
@@ -126,18 +126,14 @@ int main(int argc, char *argv[]) {
 		logf_debug("Accepting connection from %s:%d. Data:\n",
 			inet_ntoa(clientaddr.sin_addr), clientaddr.sin_port
 		);
-		char buffer[REQUEST_BUFF_SIZE];
-		ssize_t msg_len = recv(clientfd, buffer, REQUEST_BUFF_SIZE, 0);
 
-		if (msg_len == -1) {
-			perror("[ERROR] Failed to recieve message");
-			perror_line();
-		}
-		else {
-			printf("%s\n[INFO]%ld Bytes.\n", buffer, msg_len);
-			handleRequest(clientfd, buffer, REQUEST_BUFF_SIZE);
-			printf("[INFO] Connection closed.\n");
-		}
+		struct http_request req;
+		readRequest(clientfd, &req);
+		logf_debug("Read Request\n");
+		send(clientfd,
+			"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+			sizeof("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"), 0
+		);
 
 		//Is this needed?? (The if, not the close)
 		if (close(clientfd) == -1) {

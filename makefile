@@ -8,7 +8,7 @@ OBJ = $(SRC:src/%.c=obj/%.o) #Object files
 DEP = $(SRC:src/%.c=deps/%.d) #Object files
 
 CC = gcc
-FLAGS = -DDEBUG -Wall -pedantic -lmagic -Iinclude
+FLAGS = -DDEBUG -Wall -pedantic -g -lmagic -Iinclude
 
 # ========== Rules ==========
 .PHONY: compile mkdir clean run test

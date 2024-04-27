@@ -170,7 +170,7 @@ int parseline(const char *line, size_t len, const char *path, size_t linecount) 
 	// Read value.
 	end = len - 1;
 	while (isspace(line[end]) && end > start) end--;
-	if (end <= start) {
+	if (end < start) {
 		fprintf(stderr, "[WARN] Missing value after '%s'.\n", key);
 		fprintf(stderr, "\tFile: '%s' line %zu.\n", path, linecount);
 		perror_line();

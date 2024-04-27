@@ -15,12 +15,12 @@ enum LOG_LEVEL {
 */
 #define log_line() __log_line(__FILE__, __func__, __LINE__)
 
-// logf with the appropriate levels.
+// loggerf with the appropriate levels.
 
-#define logf_debug(...) logf(LOG_DEBUG, __VA_ARGS__)
-#define logf_info(...) logf(LOG_INFO, __VA_ARGS__)
-#define logf_warning(...) logf(LOG_WARNING, __VA_ARGS__)
-#define logf_error(...) logf(LOG_ERROR, __VA_ARGS__)
+#define logf_debug(...) loggerf(LOG_DEBUG, __VA_ARGS__)
+#define logf_info(...) loggerf(LOG_INFO, __VA_ARGS__)
+#define logf_warning(...) loggerf(LOG_WARNING, __VA_ARGS__)
+#define logf_error(...) loggerf(LOG_ERROR, __VA_ARGS__)
 
 /** Set up a logger.
  * @param stream The file/stream to write the logs into.
@@ -45,14 +45,14 @@ void setLogLevel(int level);
  * @param format The message to write.
  * @param ... The format values.
 */
-void logf(int level, const char format, ...);
+void loggerf(int level, const char *format, ...);
 
 /** Force log a formatted message into the logger with the same formatting syntax
  * and rules as printf regardless of logger level.
  * @param format The message to write.
  * @param ... The format values.
 */
-void logff(const char format, ...);
+void logff(const char *format, ...);
 
 /** Log the current errno string after a formatted message into the logger with
  * the same formatting syntax and rules as printf at LOG_ERROR level.
@@ -60,8 +60,8 @@ void logff(const char format, ...);
  * @param format The message to write.
  * @param ... The format values.
 */
-void logf_errno(const char format, ...);
+void logf_errno(const char *format, ...);
 
-void __log_line(const char *file, const char* func, int line);
+void __log_line(const char *file, const char *func, int line);
 
 #endif

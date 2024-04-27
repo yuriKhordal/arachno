@@ -46,7 +46,7 @@ struct http_request {
 	size_t query_len;
 	enum http_version version;
 	struct http_header header;
-	const char *body;
+	char *body;
 	size_t bodysize;
 };
 

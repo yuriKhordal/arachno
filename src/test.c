@@ -1,26 +1,44 @@
 #include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+#include<ctype.h>
+#include<sys/socket.h>
+#include<sys/sendfile.h>
+#include<sys/stat.h>
+#include<netinet/in.h>
+#include<arpa/inet.h>
+#include<unistd.h>
+#include<sys/wait.h>
+#include<fcntl.h>
+#include<endian.h>
+#include<magic.h>
+#include<signal.h>
 
-union test1 {
-   int d;
-   unsigned u;
-   char c;
-   char *s;
-   size_t zu;
-};
 
-int main(int argc, char const *argv[])
+int main2(int argc, char const *argv[])
 {
-   union test1 t1 = {.d=-10};
-   union test1 t2 = {.u=1 << (sizeof(unsigned)*8) - 1};
-   union test1 t3 = {.c='h'};
-   union test1 t4 = {.s="Hello"};
-   union test1 t5 = {.zu=15};
+   int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+   int reuseaddr = 1;
+   setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(reuseaddr));
+   struct in_addr ip;
+   ip.s_addr = htonl(0);
+   const struct sockaddr_in addr = {AF_INET, htons(8080), ip};
+	bind(sockfd, (const struct sockaddr*)&addr, sizeof(addr));
+   listen(sockfd, 1024);
 
-   printf("t1 = %d\n", t1);
-   printf("t2 = %u\n", t2);
-   printf("t3 = %c\n", t3);
-   printf("t4 = %s\n", t4);
-   printf("t4 = %zu\n", t5);
+   struct sockaddr_in clientaddr;
+	socklen_t socklen;
+	int clientfd = accept(sockfd, (struct sockaddr*)&clientaddr, &socklen);
 
+   char *buff = calloc(500, 1);
+   memset(buff, '+', 450);
+   ssize_t len = recv(clientfd, buff, 437, 0);
+
+   printf("---%s---\nlen: %zd, lastchar: %d\n", buff, len, buff[436]);
+
+   for (int i = 430; i <= 437; i++) {
+      printf("\n%d) %d ", i, buff[i]);
+   }
+      printf("\n");
    return 0;
 }
