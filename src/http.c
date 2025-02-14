@@ -10,13 +10,14 @@
 #include<sys/stat.h>
 #include<sys/types.h>
 
-#include "rest.h"
+#include "http.h"
 #include "server.h"
 #include "conf.h"
 #include "status.h"
 #include "misc.h"
 #include "logger.h"
 
+// TODO: SEND 400 BAD REQUEST OR 411 LENGTH REQUIRED ON ERRORS
 
 int cnt = 0;
 size_t ttlsize = 0;
@@ -41,10 +42,14 @@ void * __myrlloc(void *p, size_t size) {
 #define malloc(X) __mylloc(X)
 #define realloc(p, n) __myrlloc(p, n)
 
-int readRequestStartLine(char *line, struct http_request *request);
+// First line of the request: METHOD /path?query
+int readRequestLine(char *line, struct http_request *request);
 int readRequestHeader(char *line, struct http_request *request, size_t n);
+ssize_t readAndCountHeaders(char **buffer, size_t *buffsize, ssize_t *msg_len, int clientsock);
 
 int readRequest(int clientsock, struct http_request *request) {
+	int err;
+	// Initialize buffer.
 	size_t buffsize = REQUEST_BUFF_SIZE;
 	char *buffer = malloc(sizeof(char) * (buffsize + 1));
 	if (buffer == NULL) {
@@ -53,16 +58,19 @@ int readRequest(int clientsock, struct http_request *request) {
 		return -1;
 	}
 	buffer[buffsize] = '\0';
-	ssize_t msg_len = recv(clientsock, buffer, buffsize, 0);
 
+	// Recieve message.
+	ssize_t msg_len = recv(clientsock, buffer, buffsize, 0);
 	if (msg_len == -1) {
 		logf_errno("Failed to recieve message");
 		log_line();
 		free(buffer);
 		return -1;
 	}
+	buffer[msg_len] = '\0';
 
-	// Find the end of the line.
+	// =============== Request Line ===============
+	// Find the end of the request line.
 	char *lineend = strstr(buffer, "\r\n");
 	if (lineend == NULL) {
 		// No end of line or line too long.
@@ -71,58 +79,31 @@ int readRequest(int clientsock, struct http_request *request) {
 		free(buffer);
 		return -1;
 	}
-	// size_t linelen = i;
 
-	// Fill request line:
+	// Read and parse request line into `request` struct.
 	*lineend = '\0';
-	if (readRequestStartLine(buffer, request) == -1) {
+	if ((err = readRequestLine(buffer, request)) < 0) {
 		log_line();
 		free(buffer);
-		return -1;
+		return err;
 	}
 	*lineend = '\r';
 
-	// Recieve all header fields and count them;
-	request->header.fieldCount = 0;
-	char *header = lineend + 2;
-	while (1) {
-		char *temp = strstr(header, "\r\n");
-		// End of message, recieve next.
-		if (temp == NULL) {
-			buffsize *= 2;
-			char *rbuffer = realloc(buffer, sizeof(char) * buffsize);
-			if (rbuffer == NULL) {
-				logf_errno("Failed to reallocate buffer");
-				log_line();
-				free(buffer);
-				free(request->path);
-				if (request->query) free(request->query);
-				return -1;
-			}
-			buffer = rbuffer;
-			ssize_t new_msg_len = recv(clientsock, buffer + msg_len, buffsize - msg_len, 0);
-			if (new_msg_len == - 1) {
-				logf_errno("Failed to recieve message");
-				log_line();
-				free(buffer);
-				free(request->path);
-				if (request->query) free(request->query);
-				return -1;
-			}
-			msg_len += new_msg_len;
-			continue;
-		}
+	// =============== Headers ===============
 
-		while (isspace(header[0]) && header[0] != '\r') header++;
-		if (header == temp) {
-			break;
-		}
-		header = temp + 2;
-		request->header.fieldCount++;
+	// Recieve all header fields and count them
+	// But don't read/save them yet, only count
+	ssize_t headCount = readAndCountHeaders(&buffer, &buffsize, &msg_len, clientsock);
+	if (headCount < 0) {
+		log_line();
+		free(buffer);
+		free(request->path);
+		if (request->query) free(request->query);
+		return (int)headCount;
 	}
-	char *body = header;
+	request->header.fieldCount = headCount;
 
-	// Fill headers:
+	// Create header list:
 	request->header.fields = malloc(sizeof(char*) * request->header.fieldCount);
 	if (request->header.fields == NULL) {
 		logf_errno("Failed to allocate header fields");
@@ -144,36 +125,34 @@ int readRequest(int clientsock, struct http_request *request) {
 		return -1;
 	}
 	
-	size_t count = 0;
-	header = lineend + 2;
-	while (isspace(header[0])) header++;
-	
-	while (header < body) {
+	// Fill header list:
+	char *header = lineend + 2;
+	for (int i = 0; i < request->header.fieldCount; i++) {
 		char *end = strstr(header, "\r\n");
 		*end = '\0';
-		if (readRequestHeader(header, request, count) == -1) {
+		if ((err = readRequestHeader(header, request, i)) < 0) {
 			log_line();
 			free(buffer);
 			free(request->path);
 			if (request->query) free(request->query);
-			for (size_t i = 0; i < count; i++) {
-				free(request->header.fields[i]);
-				free(request->header.values[i]);
+			for (size_t j = 0; j < i; j++) {
+				free(request->header.fields[j]);
+				free(request->header.values[j]);
 			}
 			free(request->header.fields);
 			free(request->header.values);
-			return -1;
+			return err;
 		}
 		*end = '\r';
 		
 		header = end + 2;
-		while (isspace(header[0])) header++;
-		count++;
 	}
 
-	// Read Data.
-	body += 2; // Skip the \r\n delimeter.
+	// =============== Body ===============
+
+	char *body = header + 2; // Skip the \r\n delimeter.
 	int found = 0;
+	// Check for Content-Length header.
 	for (size_t i = 0; i < request->header.fieldCount; i++) {
 		if (strcmp(request->header.fields[i], "Content-Length") == 0) {
 			// TODO: Check validity of string before converting.
@@ -184,19 +163,22 @@ int readRequest(int clientsock, struct http_request *request) {
 	}
 	if (!found) request->bodysize = 0;
 
+	// Read Data.
 	if (request->bodysize > 0) {
-		size_t header_size = (body - buffer) * sizeof(char);
+		size_t header_size = body - buffer;
 		size_t current_body_size = msg_len - header_size;
+		// If not all body has been read.
 		if (request->bodysize > current_body_size) {
-			buffsize += request->bodysize - current_body_size;
-			char * rbuff = realloc(buffer, buffsize);
+			size_t diff = request->bodysize - current_body_size;
+			buffsize += diff;
+			char * rbuff = realloc(buffer, (buffsize+1) * sizeof(char));
 			if (rbuff == NULL) {
 				logf_errno("Failed to reallocate buffer");
 				log_line();
 				free(buffer);
 				free(request->path);
 				if (request->query) free(request->query);
-				for (size_t i = 0; i < count; i++) {
+				for (size_t i = 0; i < request->header.fieldCount; i++) {
 					free(request->header.fields[i]);
 					free(request->header.values[i]);
 				}
@@ -205,25 +187,24 @@ int readRequest(int clientsock, struct http_request *request) {
 				return -1;
 			}
 			buffer = rbuff;
-			ssize_t new_msg_len = recv(clientsock, buffer + msg_len,
-				request->bodysize - current_body_size, 0
-			);
+			ssize_t new_msg_len = recv(clientsock, buffer + msg_len, diff, 0);
 			if (new_msg_len == -1) {
 				logf_errno("Failed to recieve message");
 				log_line();
 				free(buffer);
 				free(request->path);
 				if (request->query) free(request->query);
-				for (size_t i = 0; i < count; i++) {
+				for (size_t i = 0; i < request->header.fieldCount; i++) {
 					free(request->header.fields[i]);
 					free(request->header.values[i]);
 				}
 				free(request->header.fields);
 				free(request->header.values);
 				return -1;
-			}	
+			}
+			msg_len += new_msg_len;
+			buffer[msg_len] = '\0';
 		}
-		// TODO: CONTINUE SOMEWHERE HERE
 
 		request->body = malloc(sizeof(char) * (request->bodysize + 1));
 		strncpy(request->body, body, request->bodysize);
@@ -232,23 +213,23 @@ int readRequest(int clientsock, struct http_request *request) {
 		request->body = NULL;
 	}
 
-	logf_debug(buffer);
+	logf_debug("Data:\n%s\n", buffer);
 	free(buffer);
 	return 0;
 }
 
-int readRequestStartLine(char *line, struct http_request *request) {
-	while (isspace(*line)) line++;
-	size_t i;
-	// Method
-	for (i = 0; !isspace(line[i]) && line[i] != '\0'; i++);
-	if (line[i] == '\0') {
-		// Missing path and version.
-		logf_warning("Invalid request start line syntax:\n%s\nDropping connection.\n", line);
+int readRequestLine(char *line, struct http_request *request) {
+	while (isspace(*line) && *line != '\0') line++;
+	if (*line == '\0') {
+		// Empty request line.
+		logf_warning("Empty request line!\nDropping connection.\n", line);
 		log_line();
 		return -1;
 	}
 
+	size_t i;
+	// Method
+	for (i = 0; !isspace(line[i]); i++) {}
 	if (strncmp(line, "GET", i) == 0) {
 		request->method = HTTP_GET;
 	} else if (strncmp(line, "HEAD", i) == 0) {
@@ -273,13 +254,23 @@ int readRequestStartLine(char *line, struct http_request *request) {
 		return -1;
 	}
 
-	while (isspace(line[i])) i++;
-	// Path
-	line += i;
-	for (i = 0; !isspace(line[i]) && line[i] != '?' && line[i] != '\0'; i++);
+	// Skip space
+	while (isspace(line[i]) && line[i] != '\0') i++;
 	if (line[i] == '\0') {
+		// Missing path and version.
+		logf_warning("Invalid request line: Missing path."
+			"\n%s\nDropping connection.\n", line);
+		log_line();
+		return -1;
+	}
+
+	// Path
+	char *path = line + i;
+	for (i=0; !isspace(path[i]) && path[i] != '?' && path[i] != '\0'; i++) {}
+	if (path[i] == '\0') {
 		// Missing http version.
-		logf_warning("Invalid request start line syntax:\n%s\nDropping connection.\n", line);
+		logf_warning("Invalid request line: Missing HTTP version.\n"
+			"%s\nDropping connection.\n", line);
 		log_line();
 		return -1;
 	}
@@ -290,22 +281,14 @@ int readRequestStartLine(char *line, struct http_request *request) {
 		log_line();
 		return -1;
 	}
-	strncpy(request->path, line, i);
+	strncpy(request->path, path, i);
 	request->path[i] = '\0';
 
-	line += i;
 	// Query String
-	if (line[0] == '?') {
-		line++;
-		for (i = 0; !isspace(line[i]) && line[i] != '\0'; i++);
-		if (line[i] == '\0') {
-			// Missing http version.
-			logf_warning("Invalid request start line syntax:\n%s\nDropping connection.\n", line);
-			log_line();
-			free(request->path);
-			return -1;
-		}
-		
+	if (path[i] == '?') {
+		i++;
+		char *query = path + i;
+		for (i = 0; !isspace(query[i]) && query[i] != '\0'; i++) {}
 		request->query_len = i;
 		request->query = malloc(sizeof(char) * (i + 1));
 		if (request->query == NULL) {
@@ -314,29 +297,38 @@ int readRequestStartLine(char *line, struct http_request *request) {
 			free(request->path);
 			return -1;
 		}
-		strncpy(request->query, line, i);
+		strncpy(request->query, query, i);
 		request->query[i] = '\0';
 	} else {
 		request->query = NULL;
 		request->query_len = 0;
 	}
 
-	while (isspace(line[i])) i++;
-	line += i;
+	while (isspace(path[i]) && path[i] != '\0') i++;
+	if (path[i] == '\0') {
+		// Missing http version.
+		logf_warning("Invalid request line: Missing HTTP version.\n"
+			"%s\nDropping connection.\n", line);
+		log_line();
+		free(request->path);
+		if (request->query) free(request->query);
+		return -1;
+	}
 	
+	char *version = path + i;
 	// HTTP/Version
-	if (strncmp(line, "HTTP/1.0", sizeof("HTTP/1.0")) == 0) {
+	if (strncmp(version, "HTTP/1.0", sizeof("HTTP/1.0")) == 0) {
 		request->version = HTTP_10;
-	} else if (strncmp(line, "HTTP/1.1", sizeof("HTTP/1.1")) == 0) {
+	} else if (strncmp(version, "HTTP/1.1", sizeof("HTTP/1.1")) == 0) {
 		request->version = HTTP_11;
-	} else if (strncmp(line, "HTTP/2", sizeof("HTTP/2")) == 0) {
+	} else if (strncmp(version, "HTTP/2", sizeof("HTTP/2")) == 0) {
 		request->version = HTTP_2;
 		logf_warning("HTTP/2 requests are unsupported. Dropping connection.\n", line);
 		log_line();
 		free(request->path);
 		if (request->query) free(request->query);
 		return -1;
-	} else if (strncmp(line, "HTTP/3", sizeof("HTTP/3")) == 0) {
+	} else if (strncmp(version, "HTTP/3", sizeof("HTTP/3")) == 0) {
 		request->version = HTTP_3;
 		logf_warning("HTTP/3 requests are unsupported. Dropping connection.\n", line);
 		log_line();
@@ -344,7 +336,7 @@ int readRequestStartLine(char *line, struct http_request *request) {
 		if (request->query) free(request->query);
 		return -1;
 	} else {
-		logf_warning("Unknown http version: %s. Dropping connection.\n", line);
+		logf_warning("Unknown http version: %s. Dropping connection.\n", version);
 		log_line();
 		free(request->path);
 		if (request->query) free(request->query);
@@ -410,64 +402,61 @@ int readRequestHeader(char *line, struct http_request *request, size_t n) {
 	return 0;
 }
 
+ssize_t readAndCountHeaders(char **buffer, size_t *buffsize, ssize_t *msg_len, int clientsock) {
+	// Recieve all header fields and count them
+	// But don't read/save them yet, only count
+	ssize_t count = 0;
+	char *header = strstr(*buffer, "\r\n") + 2; // skip first line
+	while (1) {
+		char *temp = strstr(header, "\r\n");
+		// End of message, recieve next.
+		if (temp == NULL) {
+			*buffsize *= 2;
+			char *rbuffer = realloc(*buffer, sizeof(char) * (*buffsize + 1));
+			if (rbuffer == NULL) {
+				logf_errno("Failed to reallocate buffer");
+				log_line();
+				return -1;
+			}
+			*buffer = rbuffer;
+			(*buffer)[*buffsize] = '\0';
+			ssize_t new_msg_len = recv(clientsock, buffer + *msg_len, *buffsize - *msg_len, 0);
+			if (new_msg_len == - 1) {
+				logf_errno("Failed to recieve message");
+				log_line();
+				return -1;
+			}
+			*msg_len += new_msg_len;
+			(*buffer)[*msg_len] = '\0';
+			continue;
+		}
 
-
-
-
-
-
-void handleRequest(int clntsock, const char *req, size_t n) {
-	// Get request method.
-	size_t method_len = 0;
-	while (req[method_len] != '\0' && !isspace(req[method_len]) && method_len < n) method_len++;
-	if (method_len == n) return; // no idea what to do. Garbage data???
-	if (req[method_len] == '\0') return; // no idea what to do. Garbage data???
-	char method[method_len+1]; //Request method.
-	strncpy(method, req, method_len);
-	method[method_len] = '\0';
-	for (size_t i = 0; i < method_len; i++) method[i] = toupper(method[i]);
-
-	// Check method.
-	if (strcmp(method, "GET") == 0) {
-		handleGetRequest(clntsock, req, n);
-	} else {
-		printf("[WARN] Unknown method %s.\n", method);
-		perror_line();
+		// while (isspace(header[0]) && header[0] != '\r') header++;
+		if (header == temp) {
+			break;
+		}
+		header = temp + 2;
+		count++;
 	}
+
+	return count;
 }
 
-void handleGetRequest(int clntsock, const char *req, size_t n) {
-	//Skip until the resource path.
-	while (*req != '\0' && *req != '/') {
-		req++;
-		n--;
-	}
-	if (*req == '\0') return; //TODO: Something?
 
-	// Get request path.
-	size_t path_len = 0;
-	// while(req[path_len] != '\0' && !isspace(req[path_len]) && req[path_len] != '?' && req[path_len] != '#' && path_len < n)
-	// 	path_len++;
-	while (path_len < n) {
-		if (req[path_len] == '\0' || isspace(req[path_len])) break;
-		if (req[path_len] == '?' || req[path_len] == '#') break;
-		path_len++;
-	}
-	char req_path[path_len + 1];
-	strncpy(req_path, req, path_len);
-	req_path[path_len] = '\0';
-	printf("[INFO] Request path is '%s'.\n", req_path);
 
+
+
+void handleRequest(int clntsock, const struct http_request *req) {
 	// Resolve path.
-	char path[cfg_base_path_len + path_len + cfg_default_index_len + 1];
-	if (getPath(path, NULL, req_path) == NULL) {
+	char path[cfg_base_path_len + req->path_len + cfg_default_index_len + 1];
+	if (resolvePath(path, req->path) == NULL) {
 		perror_line();
-		sendResponseHeader(clntsock, STATUS_500_INTERNAL_SERVER_ERROR, 0);
+		sendResponseHeader(clntsock, STATUS_500_STR, 0);
 		return;
 	}
 	struct stat st;
 	if (stat(path, &st) == -1 || !S_ISREG(st.st_mode)) {
-		sendResponseHeader(clntsock, STATUS_404_NOT_FOUND, 0);
+		sendResponseHeader(clntsock, STATUS_404_STR, 0);
 		// possible send 404 page.
 		return;
 	}
@@ -487,7 +476,7 @@ void handleGetRequest(int clntsock, const char *req, size_t n) {
 		perror("[ERROR] Failed opening file");
 		perror_line();
 		fprintf(stderr, "\tFile: %s\n", path);
-		sendResponseHeader(clntsock, STATUS_500_INTERNAL_SERVER_ERROR, 0);
+		sendResponseHeader(clntsock, STATUS_500_STR, 0);
 		return;
 	}
 
@@ -506,7 +495,7 @@ void handleGetRequest(int clntsock, const char *req, size_t n) {
 		// 	.content_type = mime
 		// };
 		printf("[DEBUG] Sending Response...\n");
-		sendResponseHeader(clntsock, STATUS_200_OK, 0);
+		sendResponseHeader(clntsock, STATUS_200_STR, 0);
 		sendHeaderValues(clntsock, &header, 0);
 		send(clntsock, "\n\n", 2, 0);
 		sendfile(clntsock, fd, NULL, st.st_size);
@@ -525,7 +514,7 @@ void handleGetRequest(int clntsock, const char *req, size_t n) {
 		perror_line();
 		fprintf(stderr, "\tFile: %s\n", path);
 		close(fd);
-		sendResponseHeader(clntsock, STATUS_500_INTERNAL_SERVER_ERROR, 0);
+		sendResponseHeader(clntsock, STATUS_500_STR, 0);
 		return;
 	}
 	// Static file
@@ -540,7 +529,7 @@ void handleGetRequest(int clntsock, const char *req, size_t n) {
 		};
 		printf("[DEBUG] Static html file...\n");
 		printf("[DEBUG] Sending Response...\n");
-		sendResponseHeader(clntsock, STATUS_200_OK, 0);
+		sendResponseHeader(clntsock, STATUS_200_STR, 0);
 		sendHeaderValues(clntsock, &header, 0);
 		send(clntsock, "\r\n\r\n", 4, 0);
 		lseek(fd, 0, SEEK_SET);
@@ -555,6 +544,10 @@ void handleGetRequest(int clntsock, const char *req, size_t n) {
 	FILE *file = fopen(path, "r");
 	// Give me a fucking break, later.
 	fclose(file);
+}
+
+void handleGetRequest(int clntsock, const char *req, size_t n) {
+	
 }
 
 ssize_t sendHeaderValues(int socket, const struct http_header *header, int flags) {

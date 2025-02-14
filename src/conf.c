@@ -1,7 +1,7 @@
 #include<stdio.h>
 #include<stdlib.h>
 #include<stdint.h>
-#include<limits.h>
+#include<linux/limits.h>
 #include<ctype.h>
 #include<string.h>
 #include<sys/stat.h>

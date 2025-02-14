@@ -1,5 +1,5 @@
-#ifndef __REST_H__
-#define __REST_H__
+#ifndef __HTTP_H__
+#define __HTTP_H__
 
 #include<stdio.h>
 
@@ -27,6 +27,31 @@ enum http_version {
 	HTTP_10, HTTP_11, HTTP_2, HTTP_3
 };
 
+enum http_status {
+HTTP_STATUS_100 = 100, HTTP_STATUS_101 = 101, HTTP_STATUS_102 = 102, HTTP_STATUS_103 = 103,
+
+HTTP_STATUS_200 = 200, HTTP_STATUS_201 = 201, HTTP_STATUS_202 = 202, HTTP_STATUS_203 = 203,
+HTTP_STATUS_204 = 204, HTTP_STATUS_205 = 205, HTTP_STATUS_206 = 206, HTTP_STATUS_207 = 207,
+HTTP_STATUS_208 = 208, HTTP_STATUS_226 = 226,
+
+HTTP_STATUS_300 = 300, HTTP_STATUS_301 = 301, HTTP_STATUS_302 = 302, HTTP_STATUS_303 = 303,
+HTTP_STATUS_304 = 304, HTTP_STATUS_305 = 305, HTTP_STATUS_306 = 306, HTTP_STATUS_307 = 307,
+HTTP_STATUS_308 = 308,
+
+HTTP_STATUS_400 = 400, HTTP_STATUS_401 = 401, HTTP_STATUS_402 = 402, HTTP_STATUS_403 = 403,
+HTTP_STATUS_404 = 404, HTTP_STATUS_405 = 405, HTTP_STATUS_406 = 406, HTTP_STATUS_407 = 407,
+HTTP_STATUS_408 = 408, HTTP_STATUS_409 = 409, HTTP_STATUS_410 = 410, HTTP_STATUS_411 = 411,
+HTTP_STATUS_412 = 412, HTTP_STATUS_413 = 413, HTTP_STATUS_414 = 414, HTTP_STATUS_415 = 415,
+HTTP_STATUS_416 = 416, HTTP_STATUS_417 = 417, HTTP_STATUS_418 = 418, HTTP_STATUS_421 = 421,
+HTTP_STATUS_422 = 422, HTTP_STATUS_423 = 423, HTTP_STATUS_424 = 424, HTTP_STATUS_425 = 425,
+HTTP_STATUS_426 = 426, HTTP_STATUS_428 = 428, HTTP_STATUS_429 = 429, HTTP_STATUS_431 = 431,
+HTTP_STATUS_451 = 451,
+
+HTTP_STATUS_500 = 500, HTTP_STATUS_501 = 501, HTTP_STATUS_502 = 502, HTTP_STATUS_503 = 503,
+HTTP_STATUS_504 = 504, HTTP_STATUS_505 = 505, HTTP_STATUS_506 = 506, HTTP_STATUS_507 = 507,
+HTTP_STATUS_508 = 508, HTTP_STATUS_510 = 510, HTTP_STATUS_511 = 511
+};
+
 /** Represents an HTTP header's `name:value` pairs. */
 struct http_header {
 	/** An array of the http field names. */
@@ -50,6 +75,14 @@ struct http_request {
 	size_t bodysize;
 };
 
+struct http_response {
+	enum http_version version;
+	enum http_status status;
+	struct http_header header;
+	char *body;
+	size_t bodysize;
+};
+
 // ==================== Functions ====================
 
 /** Read a request from the client, and fill an http_server struct with the
@@ -63,13 +96,7 @@ int readRequest(int clientsock, struct http_request *request);
  * @param req The http request string.
  * @param n The size of the request.
 */
-void handleRequest(int clntsock, const char *req, size_t n);
-/** Handle a GET request.
- * @param clntsock The socket of the currently connected client that sent the request.
- * @param req The GET request string.
- * @param n The size of the request.
-*/
-void handleGetRequest(int clntsock, const char *req, size_t n);
+void handleRequest(int clntsock, const struct http_request *req);
 
 /** Send a response header to a specified socket.
  * Does not send the http header's `key:value` pairs.
