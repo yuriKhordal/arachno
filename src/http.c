@@ -498,6 +498,7 @@ int headerAdd(http_header_t *header, const char *name, const char *value) {
 	// Check if field already in header struct, if yes replace.
 	ssize_t index = headerFind(header, name);
 	if (index >= 0) {
+		free(header->values[index]);
 		header->values[index] = dupvalue;
 		return FIELD_REPLACED;
 	}
