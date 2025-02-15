@@ -143,7 +143,8 @@ int main(int argc, char *argv[]) {
 			inet_ntoa(clientaddr.sin_addr), clientaddr.sin_port
 		);
 
-		struct http_request req;
+		http_request_t req;
+		headerInit(&req.header);
 		int err = readRequest(clientfd, &req);
 		if (err < 0) {
 			log_line();
@@ -176,12 +177,7 @@ int main(int argc, char *argv[]) {
 
 		// free request
 		free(req.body);
-		for (int i = 0; i < req.header.fieldCount; i++) {
-			free(req.header.fields[i]);
-			free(req.header.values[i]);
-		}
-		free(req.header.fields);
-		free(req.header.values);
+		headerDestroy(&req.header);
 		free(req.path);
 		if (req.query)
 			free(req.query);

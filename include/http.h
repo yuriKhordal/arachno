@@ -53,17 +53,19 @@ HTTP_STATUS_508 = 508, HTTP_STATUS_510 = 510, HTTP_STATUS_511 = 511
 };
 
 /** Represents an HTTP header's `name:value` pairs. */
-struct http_header {
+typedef struct http_header {
 	/** An array of the http field names. */
 	char **fields;
 	/** An array of the values of the http fields. */
 	char **values;
 	/** The amount of http fields in the header. */
 	size_t fieldCount;
-};
+	/** The size of the `fields` and `values` arrays. */
+	size_t arraySize;
+} http_header_t;
 
 /**Represents an HTTP request.*/
-struct http_request {
+typedef struct http_request {
 	enum http_method method;
 	char *path;
 	size_t path_len;
@@ -73,30 +75,30 @@ struct http_request {
 	struct http_header header;
 	char *body;
 	size_t bodysize;
-};
+} http_request_t;
 
-struct http_response {
+typedef struct http_response {
 	enum http_version version;
 	enum http_status status;
 	struct http_header header;
 	char *body;
 	size_t bodysize;
-};
+} http_response_t;
 
-// ==================== Functions ====================
+// ==================== Request Functions ====================
 
 /** Read a request from the client, and fill an http_server struct with the
  * recieved data.
  * @return An http_request structure that represents the request.
 */
-int readRequest(int clientsock, struct http_request *request);
+int readRequest(int clientsock, http_request_t *request);
 
 /** Handle an incoming http request.
  * @param clntsock The socket of the currently connected client that sent the request.
  * @param req The http request string.
  * @param n The size of the request.
 */
-void handleRequest(int clntsock, const struct http_request *req);
+void handleRequest(int clntsock, const http_request_t *req);
 
 /** Send a response header to a specified socket.
  * Does not send the http header's `key:value` pairs.
@@ -115,21 +117,94 @@ ssize_t sendResponseHeader(int socket, const char *status, int flags);
  * @return The number of bytes sent. On error -1 is returned and errno set to
  * indicate the error.
 */
-ssize_t sendHeaderValues(int socket, const struct http_header *header, int flags);
+ssize_t sendHeaderValues(int socket, const http_header_t *header, int flags);
 
-/** Checks wheather a header fields list has a specified field.
- * @param list The list of fields. The list is assumed to be sorted
- * alphabetically with the names in lower case.
- * @param name The name of the field to search for, case irrelevant.
- * @return True(1) if the field exists, False(0) otherwise.
-*/
-int headerHasField(const struct http_header *list, const char *name);
+// ==================== Header Functions ====================
 
-/** Returns the value of a field from a header fields list.
- * @param list The list of fields.
- * @param name The name of the field to search for.
- * @return A pointer to the value of the field, or NULL if the field is not found.
-*/
-const char *headerGetFieldValue(const struct http_header *list, const char *name);
+/**
+ * Allocate a new header struct, initialize it, and return a pointer to it.
+ * @note Caller takes ownership of the new pointer.
+ * @note
+ * Must be freed with `headerFree`, not `headerDestroy`. Destroy function
+ * only releases memory inside the struct, without the pointer to the struct
+ * itself.
+ * @exception Return `NULL` if failed to allocate.
+ */
+http_header_t * headerNew();
+
+/**
+ * Initialize a header struct.
+ * @note
+ * Must be destroyed with `headerDestroy()`, not `headerFree()`. Free function
+ * releases the memory used by the header AND the struct header itself, so if
+ * the header was allocated on the stack, the behaviour of `headerFree()` would
+ * be undefined.
+ */
+void headerInit(http_header_t *header);
+
+/**
+ * Release the memory used by the header struct, but not the struct itself!
+ * @note
+ * The complementory function to `headerInit`. For pointers allocated by
+ * `headerNew`, use `headerFree`.
+ */
+void headerDestroy(http_header_t *header);
+
+/**
+ * Release the memory used by the header struct, and the struct itself.
+ * @note
+ * The complementory function to `headerNew`. For stack allocated headers
+ * initialized by `headerInit`, use `headerDestroy`.
+ */
+void headerFree(http_header_t *header);
+
+/**
+ * Adds a `name:value` pair to a header struct. If a pair with the same name
+ * is already in the header struct, replaces the value in the struct with the
+ * parameter.
+ * The name and value strings are copied as new strings, and the struct
+ * owns it's own memory.
+ * @returns 0 if successfully added, 1 if replaced existing value, and a
+ * negative value on failure.
+ * @exception returns (some negative) if one of the parameters is NULL.
+ * @exception returns (some negative) on a memry allocation error.
+ */
+int headerAdd(http_header_t *header, const char *name, const char *value);
+
+/**
+ * Searches for a field in a header struct by name, and returns it's index or
+ * -1 if the field was not found.
+ * @exception Returns -1 if the header or name pointers are `NULL`.
+ */
+ssize_t headerFind(const http_header_t *header, const char *name);
+
+/**
+ * Gets a field in a header struct by name, and returns it's value or
+ * NULL if the field was not found.
+ * @exception Returns `NULL` if the header or name pointers are `NULL`.
+ */
+const char* headerGetByName(const http_header_t *header, const char *name);
+
+/**
+ * Gets a field in a header struct by index, and returns it's value or
+ * NULL if the field was not found.
+ * @exception Returns `NULL` if the header pointer is `NULL` or if
+ * the index is out of range.
+ */
+const char* headerGetByIndex(const http_header_t *header, int index);
+
+/**
+ * Gets a field in a header struct by index, and returns it's name or
+ * NULL if the field was not found.
+ * @exception Returns `NULL` if the header pointer is `NULL` or if
+ * the index is out of range.
+ */
+const char* headerGetNameByIndex(const http_header_t *header, int index);
+
+/**
+ * Returns the amount of fields in the header struct.
+ * @exception Returns -1 if the header pointer is `NULL`.
+ */
+ssize_t headerLength(const http_header_t *header);
 
 #endif

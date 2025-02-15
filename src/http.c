@@ -1,4 +1,3 @@
-
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
@@ -16,6 +15,7 @@
 #include "status.h"
 #include "misc.h"
 #include "logger.h"
+#include "errors.h"
 
 // TODO: SEND 400 BAD REQUEST OR 411 LENGTH REQUIRED ON ERRORS
 
@@ -44,8 +44,12 @@ void * __myrlloc(void *p, size_t size) {
 
 // First line of the request: METHOD /path?query
 int readRequestLine(char *line, struct http_request *request);
-int readRequestHeader(char *line, struct http_request *request, size_t n);
+int readRequestHeader(char *line, http_header_t *header, size_t n);
 ssize_t readAndCountHeaders(char **buffer, size_t *buffsize, ssize_t *msg_len, int clientsock);
+
+int strcmpi(const char *str1, const char *str2);
+
+// ==================== Requset Functions ====================
 
 int readRequest(int clientsock, struct http_request *request) {
 	int err;
@@ -101,46 +105,18 @@ int readRequest(int clientsock, struct http_request *request) {
 		if (request->query) free(request->query);
 		return (int)headCount;
 	}
-	request->header.fieldCount = headCount;
-
-	// Create header list:
-	request->header.fields = malloc(sizeof(char*) * request->header.fieldCount);
-	if (request->header.fields == NULL) {
-		logf_errno("Failed to allocate header fields");
-		log_line();
-		free(buffer);
-		free(request->path);
-		if (request->query) free(request->query);
-		return -1;
-	}
-	
-	request->header.values = malloc(sizeof(char*) * request->header.fieldCount);
-	if (request->header.values == NULL) {
-		logf_errno("Failed to allocate header fields");
-		log_line();
-		free(buffer);
-		free(request->path);
-		if (request->query) free(request->query);
-		free(request->header.fields);
-		return -1;
-	}
 	
 	// Fill header list:
 	char *header = lineend + 2;
-	for (int i = 0; i < request->header.fieldCount; i++) {
+	for (int i = 0; i < headCount; i++) {
 		char *end = strstr(header, "\r\n");
 		*end = '\0';
-		if ((err = readRequestHeader(header, request, i)) < 0) {
+		if ((err = readRequestHeader(header, &request->header, i)) < 0) {
 			log_line();
 			free(buffer);
 			free(request->path);
 			if (request->query) free(request->query);
-			for (size_t j = 0; j < i; j++) {
-				free(request->header.fields[j]);
-				free(request->header.values[j]);
-			}
-			free(request->header.fields);
-			free(request->header.values);
+			headerDestroy(&request->header);
 			return err;
 		}
 		*end = '\r';
@@ -151,17 +127,13 @@ int readRequest(int clientsock, struct http_request *request) {
 	// =============== Body ===============
 
 	char *body = header + 2; // Skip the \r\n delimeter.
-	int found = 0;
-	// Check for Content-Length header.
-	for (size_t i = 0; i < request->header.fieldCount; i++) {
-		if (strcmp(request->header.fields[i], "Content-Length") == 0) {
-			// TODO: Check validity of string before converting.
-			request->bodysize = atol(request->header.values[i]);
-			found = 1;
-			break;
-		}
+	const char *contentLength = headerGetByName(&request->header, "Content-Length");
+	if (contentLength) {
+		// TODO: Check validity of string before converting.
+		request->bodysize = atol(contentLength);
+	} else {
+		request->bodysize = 0;
 	}
-	if (!found) request->bodysize = 0;
 
 	// Read Data.
 	if (request->bodysize > 0) {
@@ -178,12 +150,7 @@ int readRequest(int clientsock, struct http_request *request) {
 				free(buffer);
 				free(request->path);
 				if (request->query) free(request->query);
-				for (size_t i = 0; i < request->header.fieldCount; i++) {
-					free(request->header.fields[i]);
-					free(request->header.values[i]);
-				}
-				free(request->header.fields);
-				free(request->header.values);
+				headerDestroy(&request->header);
 				return -1;
 			}
 			buffer = rbuff;
@@ -194,12 +161,7 @@ int readRequest(int clientsock, struct http_request *request) {
 				free(buffer);
 				free(request->path);
 				if (request->query) free(request->query);
-				for (size_t i = 0; i < request->header.fieldCount; i++) {
-					free(request->header.fields[i]);
-					free(request->header.values[i]);
-				}
-				free(request->header.fields);
-				free(request->header.values);
+				headerDestroy(&request->header);
 				return -1;
 			}
 			msg_len += new_msg_len;
@@ -346,59 +308,54 @@ int readRequestLine(char *line, struct http_request *request) {
 	return 0;
 }
 
-int readRequestHeader(char *line, struct http_request *request, size_t n) {
-	char *orig = line;
+int readRequestHeader(char *line, http_header_t *header, size_t n) {
+	char *field = line;
+	while (isspace(*field)) field++;
 
-	char *idx = strchr(line, ':');
-	if (idx == NULL) {
+	char *sep = strchr(field, ':');
+	if (sep == NULL) {
 		logf_warning("Failed to parse header line:%s\n"
-			"Missing ':', dropping connection.", orig
+			"Missing ':', dropping connection.\n", line
 		);
 		log_line();
 		return -1;
 	}
 	
-	while (isspace(line[0])) line++;
-	size_t field_len = idx - line;
-	while (isspace(line[field_len - 1]) && field_len > 0) field_len--;
+	size_t field_len = sep - field;
+	while (isspace(field[field_len - 1]) && field_len > 0) field_len--;
 	if (field_len == 0) {
 		logf_warning("Failed to parse header line:%s\n"
-			"Empty field name, dropping connection.", orig
+			"Empty field name, dropping connection.\n", line
 		);
 		log_line();
 		return -1;
 	}
 	
-	idx++;
-	while (isspace(idx[0])) idx++;
-	size_t value_len = strlen(idx);
-	while (isspace(idx[value_len - 1]) && value_len > 0) value_len--;
+	char *value = sep + 1;
+	while (isspace(*value)) value++;
+	size_t value_len = strlen(value);
+	while (isspace(value[value_len - 1]) && value_len > 0) value_len--;
 	if (value_len == 0) {
 		logf_warning("Failed to parse header line:%s\n"
-			"Empty field value, dropping connection.", orig
+			"Empty field value, dropping connection.\n", line
 		);
 		log_line();
 		return -1;
 	}
 
-	request->header.fields[n] = malloc(sizeof(char) * (field_len + 1));
-	if (request->header.fields[n] == NULL) {
-		logf_errno("Failed to allocate header");
-		log_line();
-		return -1;
-	}
-	request->header.values[n] = malloc(sizeof(char) * (value_len + 1));
-	if (request->header.values[n] == NULL) {
-		logf_errno("Failed to allocate header");
-		log_line();
-		return -1;
-	}
-	
-	strncpy(request->header.fields[n], line, field_len);
-	request->header.fields[n][field_len] = '\0';
-	strncpy(request->header.values[n], idx, value_len);
-	request->header.values[n][value_len] = '\0';
+	char ftmp = field[field_len];
+	char vtmp = value[value_len];
+	field[field_len] = '\0';
+	value[value_len] = '\0';
 
+	int err = headerAdd(header, field, value);
+	if (err < 0) {
+		log_line();
+		return err;
+	}
+
+	field[field_len] = ftmp;
+	value[value_len] = vtmp;
 	return 0;
 }
 
@@ -442,9 +399,189 @@ ssize_t readAndCountHeaders(char **buffer, size_t *buffsize, ssize_t *msg_len, i
 	return count;
 }
 
+int readData() {
+
+}
+
+// ==================== Header Functions ====================
+
+http_header_t * headerNew() {
+	http_header_t * header = malloc(sizeof(http_header_t));
+	if (header == NULL) {
+		logf_errno("Failed allocating http_header");
+		log_line();
+		return NULL;
+	}
+
+	headerInit(header);
+	return header;
+}
+
+void headerInit(http_header_t *header) {
+	CHECK_NULL(header,);
+
+	header->arraySize = 0;
+	header->fieldCount = 0;
+	header->fields = NULL;
+	header->values = NULL;
+}
+
+void headerDestroy(http_header_t *header) {
+	CHECK_NULL(header,);
+
+	if (header->fields != NULL) {
+		for (size_t i = 0; i < header->fieldCount; i++) {
+			free(header->fields[i]);
+			free(header->values[i]);
+		}
+		free(header->fields);
+		free(header->values);
+		header->fields = NULL;
+		header->values = NULL;
+	}
+}
+
+void headerFree(http_header_t *header) {
+	CHECK_NULL(header,);
+
+	if (header->fields != NULL) {
+		for (size_t i = 0; i < header->fieldCount; i++) {
+			free(header->fields[i]);
+			free(header->values[i]);
+		}
+		free(header->fields);
+		free(header->values);
+		header->fields = NULL;
+		header->values = NULL;
+	}
+
+	free(header);
+}
+
+int headerAdd(http_header_t *header, const char *name, const char *value) {
+	const int FIELD_ADDED = 0;
+	const int FIELD_REPLACED = 1;
+	CHECK_NULL(header, AR_ERROR_NULL);
+	CHECK_NULL(name, AR_ERROR_NULL);
+	CHECK_NULL(value, AR_ERROR_NULL);
+	
+	// Resize if full.
+	if (header->fieldCount == header->arraySize) {
+		if (header->arraySize == 0) header->arraySize = 8;
+		else header->arraySize *= 2;
+
+		char **fields = realloc(header->fields, sizeof(char*) * header->arraySize);
+		if (fields == NULL) {
+			logf_errno("Failed realocating http_header fields array");
+			log_line();
+			return AR_ERROR_ALLOC;
+		}
+		header->fields = fields;
+
+		char **values = realloc(header->values, sizeof(char*) * header->arraySize);
+		if (values == NULL) {
+			logf_errno("Failed realocating http_header values array");
+			log_line();
+			return AR_ERROR_ALLOC;
+		}
+		header->values = values;
+	}
+
+	// Duplicate value.
+	char *dupvalue = strdup(value);
+	if (dupvalue == NULL) {
+		logf_errno("Failed duplicating field value for http_header");
+		log_line();
+		return AR_ERROR_ALLOC;
+	}
+
+	// Check if field already in header struct, if yes replace.
+	ssize_t index = headerFind(header, name);
+	if (index >= 0) {
+		header->values[index] = dupvalue;
+		return FIELD_REPLACED;
+	}
+
+	// Duplicate name.
+	char *dupname = strdup(name);
+	if (dupname == NULL) {
+		logf_errno("Failed duplicating field name for http_header");
+		log_line();
+		free(dupvalue);
+		return AR_ERROR_ALLOC;
+	}
+
+	// Append
+	header->fields[header->fieldCount] = dupname;
+	header->values[header->fieldCount] = dupvalue;
+	header->fieldCount++;
+	return FIELD_ADDED;
+}
+
+ssize_t headerFind(const http_header_t *header, const char *name) {
+	CHECK_NULL(header, AR_ERROR_NULL);
+	CHECK_NULL(name, AR_ERROR_NULL);
+	
+	for (size_t i = 0; i < header->fieldCount; i++) {
+		if (strcmpi(name, header->fields[i]) == 0)
+			return i;
+	}
+
+	return -1;
+}
+
+const char* headerGetByName(const http_header_t *header, const char *name) {
+	CHECK_NULL(header, NULL);
+	CHECK_NULL(name, NULL);
+	
+	for (size_t i = 0; i < header->fieldCount; i++) {
+		if (strcmpi(name, header->fields[i]) == 0)
+			return header->values[i];
+	}
+
+	return NULL;
+}
+
+const char* headerGetByIndex(const http_header_t *header, int index) {
+	CHECK_NULL(header, NULL);
+	CHECK_INDEX(index, header->fieldCount, NULL);
+
+	return header->values[index];
+}
+
+const char* headerGetNameByIndex(const http_header_t *header, int index) {
+	CHECK_NULL(header, NULL);
+	CHECK_INDEX(index, header->fieldCount, NULL);
+
+	return header->fields[index];
+}
+
+ssize_t headerLength(const http_header_t *header) {
+	CHECK_NULL(header, AR_ERROR_NULL);
+
+	return header->fieldCount;
+}
 
 
+// MISC
 
+int strcmpi(const char *str1, const char *str2) {
+	if (str1 == NULL) return 1;
+	if (str2 == NULL) return -1;
+
+	int diff = tolower(*str1) - tolower(*str2);
+	while (diff == 0 && *str1 && *str2) {
+		str1++;
+		str2++;
+		diff = tolower(*str1) - tolower(*str2);
+	}
+
+	if (diff < 0) return -1;
+	else if (diff > 0) return 1;
+	else return 0;
+}
+
+// ==================== Legacy Functions ====================
 
 void handleRequest(int clntsock, const struct http_request *req) {
 	// Resolve path.
@@ -485,12 +622,12 @@ void handleRequest(int clntsock, const struct http_request *req) {
 		char st_size[21]={0}; sprintf(st_size, "%ld", st.st_size);
 		char *fields[2] = { "Content-Type", "Content-Length"};
 		char *values[2] = { (char*)mime, st_size };
-		struct http_header header = {
+		http_header_t header = {
 			.fieldCount = 2,
 			.fields = fields,
 			.values = values
 		};
-		// struct http_header header = {
+		// http_header_t header = {
 		// 	.content_length = st.st_size,
 		// 	.content_type = mime
 		// };
@@ -522,7 +659,7 @@ void handleRequest(int clntsock, const struct http_request *req) {
 		char st_size[21]={0}; sprintf(st_size, "%ld", st.st_size);
 		char *fields[2] = { "Content-Type", "Content-Length"};
 		char *values[2] = { (char*)mime, st_size };
-		struct http_header header = {
+		http_header_t header = {
 			.fieldCount = 2,
 			.fields = fields,
 			.values = values
@@ -550,7 +687,7 @@ void handleGetRequest(int clntsock, const char *req, size_t n) {
 	
 }
 
-ssize_t sendHeaderValues(int socket, const struct http_header *header, int flags) {
+ssize_t sendHeaderValues(int socket, const http_header_t *header, int flags) {
 	size_t header_size = 0;
 	for (size_t i = 0; i < header->fieldCount; i++) {
 		header_size += strlen(header->fields[i]);
