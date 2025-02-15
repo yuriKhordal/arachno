@@ -19,29 +19,6 @@
 
 // TODO: SEND 400 BAD REQUEST OR 411 LENGTH REQUIRED ON ERRORS
 
-int cnt = 0;
-size_t ttlsize = 0;
-
-void * __mylloc(size_t size) {
-	void *p = malloc(size);
-	cnt++;
-	ttlsize += size;
-	return p;
-}
-
-int rcnt = 0;
-size_t rttlsize = 0;
-
-void * __myrlloc(void *p, size_t size) {
-	void *p2 = realloc(p, size);
-	rcnt++;
-	rttlsize += size;
-	return p2;
-}
-
-#define malloc(X) __mylloc(X)
-#define realloc(p, n) __myrlloc(p, n)
-
 // First line of the request: METHOD /path?query
 int readRequestLine(char *line, struct http_request *request);
 int readRequestHeader(char *line, http_header_t *header, size_t n);
