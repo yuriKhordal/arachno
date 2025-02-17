@@ -144,7 +144,7 @@ int main(int argc, char *argv[]) {
 		);
 
 		http_request_t req;
-		headerInit(&req.header);
+		headerInit(&req.headers);
 		int err = readRequest(clientfd, &req);
 		if (err < 0) {
 			log_line();
@@ -177,7 +177,7 @@ int main(int argc, char *argv[]) {
 
 		// free request
 		free(req.body);
-		headerDestroy(&req.header);
+		headerDestroy(&req.headers);
 		free(req.path);
 		if (req.query)
 			free(req.query);

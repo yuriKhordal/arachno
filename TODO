@@ -1,0 +1,9 @@
+ - Add arc_ prefix to variable/function/constant names to avoid collisions of common names.
+ - Implement Query String object as a Map (Similar to the HTTP Headers Map).
+ - Change logger to end with '\n' by default.
+ - Another something with logger(Don't remember).
+ - Better way to log errors that would allow the user to access the error messages to display on custom 5XX pages.
+ - Consider adding a new log function(log_exception) that automatically logs function name and line and also duplicates the error message into a seperate (thread local) buffer so that it can be displayed in a 4XX/5XX page.
+ - If Content-Type is x-www-form-urlencoded put in a form map object, like query string.
+ - Add remove to token_map.
+ - ? Add modes to the map, so it can behave in one way when being an HTTP Headers map(e.g. Keys being case irrelevant) and different ways in other maps.

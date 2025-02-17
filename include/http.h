@@ -2,6 +2,7 @@
 #define __HTTP_H__
 
 #include<stdio.h>
+#include "map.h"
 
 // ==================== Constants/Defines ====================
 
@@ -52,17 +53,8 @@ HTTP_STATUS_504 = 504, HTTP_STATUS_505 = 505, HTTP_STATUS_506 = 506, HTTP_STATUS
 HTTP_STATUS_508 = 508, HTTP_STATUS_510 = 510, HTTP_STATUS_511 = 511
 };
 
-/** Represents an HTTP header's `name:value` pairs. */
-typedef struct http_header {
-	/** An array of the http field names. */
-	char **fields;
-	/** An array of the values of the http fields. */
-	char **values;
-	/** The amount of http fields in the header. */
-	size_t fieldCount;
-	/** The size of the `fields` and `values` arrays. */
-	size_t arraySize;
-} http_header_t;
+#define http_header arc_token_map
+typedef struct arc_token_map http_header_t;
 
 /**Represents an HTTP request.*/
 typedef struct http_request {
@@ -72,7 +64,7 @@ typedef struct http_request {
 	char *query;
 	size_t query_len;
 	enum http_version version;
-	struct http_header header;
+	struct http_header headers;
 	char *body;
 	size_t bodysize;
 } http_request_t;
@@ -80,7 +72,7 @@ typedef struct http_request {
 typedef struct http_response {
 	enum http_version version;
 	enum http_status status;
-	struct http_header header;
+	struct http_header headers;
 	char *body;
 	size_t bodysize;
 } http_response_t;
@@ -121,90 +113,15 @@ ssize_t sendHeaderValues(int socket, const http_header_t *header, int flags);
 
 // ==================== Header Functions ====================
 
-/**
- * Allocate a new header struct, initialize it, and return a pointer to it.
- * @note Caller takes ownership of the new pointer.
- * @note
- * Must be freed with `headerFree`, not `headerDestroy`. Destroy function
- * only releases memory inside the struct, without the pointer to the struct
- * itself.
- * @exception Return `NULL` if failed to allocate.
- */
-http_header_t * headerNew();
-
-/**
- * Initialize a header struct.
- * @note
- * Must be destroyed with `headerDestroy()`, not `headerFree()`. Free function
- * releases the memory used by the header AND the struct header itself, so if
- * the header was allocated on the stack, the behaviour of `headerFree()` would
- * be undefined.
- */
-void headerInit(http_header_t *header);
-
-/**
- * Release the memory used by the header struct, but not the struct itself!
- * @note
- * The complementory function to `headerInit`. For pointers allocated by
- * `headerNew`, use `headerFree`.
- */
-void headerDestroy(http_header_t *header);
-
-/**
- * Release the memory used by the header struct, and the struct itself.
- * @note
- * The complementory function to `headerNew`. For stack allocated headers
- * initialized by `headerInit`, use `headerDestroy`.
- */
-void headerFree(http_header_t *header);
-
-/**
- * Adds a `name:value` pair to a header struct. If a pair with the same name
- * is already in the header struct, replaces the value in the struct with the
- * parameter.
- * The name and value strings are copied as new strings, and the struct
- * owns it's own memory.
- * @returns 0 if successfully added, 1 if replaced existing value, and a
- * negative value on failure.
- * @exception returns (some negative) if one of the parameters is NULL.
- * @exception returns (some negative) on a memry allocation error.
- */
-int headerAdd(http_header_t *header, const char *name, const char *value);
-
-/**
- * Searches for a field in a header struct by name, and returns it's index or
- * -1 if the field was not found.
- * @exception Returns -1 if the header or name pointers are `NULL`.
- */
-ssize_t headerFind(const http_header_t *header, const char *name);
-
-/**
- * Gets a field in a header struct by name, and returns it's value or
- * NULL if the field was not found.
- * @exception Returns `NULL` if the header or name pointers are `NULL`.
- */
-const char* headerGetByName(const http_header_t *header, const char *name);
-
-/**
- * Gets a field in a header struct by index, and returns it's value or
- * NULL if the field was not found.
- * @exception Returns `NULL` if the header pointer is `NULL` or if
- * the index is out of range.
- */
-const char* headerGetByIndex(const http_header_t *header, int index);
-
-/**
- * Gets a field in a header struct by index, and returns it's name or
- * NULL if the field was not found.
- * @exception Returns `NULL` if the header pointer is `NULL` or if
- * the index is out of range.
- */
-const char* headerGetNameByIndex(const http_header_t *header, int index);
-
-/**
- * Returns the amount of fields in the header struct.
- * @exception Returns -1 if the header pointer is `NULL`.
- */
-ssize_t headerLength(const http_header_t *header);
+#define headerNew() arcMapNew()
+#define headerInit(header) arcMapInit(header)
+#define headerDestroy(header) arcMapDestroy(header)
+#define headerFree(header) arcMapFree(header)
+#define headerAdd(header, name, value) arcMapPut(header, name, value)
+#define headerFind(header, name) arcMapFind(header, name)
+#define headerGetByName(header, name) arcMapGetByName(header, name)
+#define headerGetByIndex(header, index) arcMapGetByIndex(header, index)
+#define headerGetNameByIndex(header, index) arcMapGetKey(header, index)
+#define headerLength(header) arcMapLength(header)
 
 #endif
