@@ -1,5 +1,16 @@
-#define ARC_ERR_NULL -1
-#define ARC_ERR_ALLOC -2
+// Represents an error caused by a null value or argument.
+#define ARC_ERR_NULL -10
+// Represents an error caused by a failed allocation.
+#define ARC_ERR_ALLOC -11
+// Represents an error related to sockets. Opening, reading, writing, sending, etc'.
+#define ARC_ERR_SOCK -12
+// Represents an error in syntax.
+#define ARC_ERR_SYNTAX -13
+#define ARC_ERR_NO_LENGTH -14
+#define ARC_ERR_UNSUPPORTED_HTTP_VER -48
+#define ARC_ERR_UNSUPPORTED -49
+#define ARC_ERR_OTHER -50
+#define ARC_ERR_NOT_IMPLEMENTED -51
 
 #define ARC_CHECK_NULL(param, return_value) { \
 	if (param == NULL) { \

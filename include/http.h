@@ -56,13 +56,20 @@ HTTP_STATUS_508 = 508, HTTP_STATUS_510 = 510, HTTP_STATUS_511 = 511
 #define http_header arc_token_map
 typedef struct arc_token_map http_header_t;
 
+typedef struct http_query {
+	char *str;
+	size_t str_len;
+	struct arc_token_map params;
+} http_query_t;
+
 /**Represents an HTTP request.*/
 typedef struct http_request {
 	enum http_method method;
 	char *path;
 	size_t path_len;
-	char *query;
-	size_t query_len;
+	// char *query;
+	// size_t query_len;
+	struct http_query query;
 	enum http_version version;
 	struct http_header headers;
 	char *body;
@@ -78,6 +85,9 @@ typedef struct http_response {
 } http_response_t;
 
 // ==================== Request Functions ====================
+
+void requestInit(http_request_t *request);
+void requestDestroy(http_request_t *request);
 
 /** Read a request from the client, and fill an http_server struct with the
  * recieved data.
@@ -123,5 +133,9 @@ ssize_t sendHeaderValues(int socket, const http_header_t *header, int flags);
 #define headerGetByIndex(header, index) arcMapGetByIndex(header, index)
 #define headerGetNameByIndex(header, index) arcMapGetKey(header, index)
 #define headerLength(header) arcMapLength(header)
+
+// ==================== Query Functions ====================
+
+void arcQueryDestroy(http_query_t *query);
 
 #endif

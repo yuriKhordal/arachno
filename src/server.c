@@ -23,6 +23,7 @@
 #include "conf.h"
 #include "misc.h"
 #include "logger.h"
+#include "errors.h"
 
 // TODO: Move to other place.
 struct htmlf_format_list {
@@ -57,6 +58,7 @@ int staticFileHandler(int sock, const struct http_request *req);
 int tryExt(int sock, const struct http_request *req);
 int send404(int sock, const struct http_request *req);
 int initArachno();
+void sendError(int arcErr, int sock);
 
 struct {
 	/** An array of request handlers. */
@@ -144,28 +146,24 @@ int main(int argc, char *argv[]) {
 		);
 
 		http_request_t req;
-		headerInit(&req.headers);
+		requestInit(&req);
 		int err = readRequest(clientfd, &req);
 		if (err < 0) {
 			log_line();
-			send(clientfd, "HTTP/1.1 "STATUS_500_STR"\r\n\r\n", 40, 0);
+			sendError(err, clientfd);
 			if (close(clientfd) == -1) {
 				logf_errno("close() failed???? Info");
 				log_line();
 			}
+			continue;
 		}
-		// int fileRes = staticFileHandler(clientfd, &req);
-		// if (fileRes == 0) {
-		// 	send404(clientfd, &req);
-		// } else if (fileRes == -1) {
-		// 	send(clientfd, "HTTP/1.1 "STATUS_500_STR"\r\n\r\n", 30, 0);
-		// }
 
 		int handledResult = 0;
 		for (int i = 0; i < requestHandlers.count && handledResult != 1; i++) {
 			handledResult = requestHandlers.arr[i](clientfd, &req);
 		}
 		if (handledResult <= 0) {
+			sendError(handledResult, clientfd);
 			send(clientfd, "HTTP/1.1 "STATUS_500_STR"\r\n\r\n", 40, 0);
 		}
 
@@ -175,12 +173,7 @@ int main(int argc, char *argv[]) {
 			log_line();
 		}
 
-		// free request
-		free(req.body);
-		headerDestroy(&req.headers);
-		free(req.path);
-		if (req.query)
-			free(req.query);
+		requestDestroy(&req);
 
 		// if (pid == 0) return EXIT_SUCCESS; // Child
 	}
@@ -478,4 +471,28 @@ int serveFile(int sock, const char *path, const struct http_response *res) {
 
 	fclose(file);
 	return 0;
+}
+
+void sendError(int arcErr, int sock) {
+	const char *status;
+	switch(arcErr) {
+	case ARC_ERR_SYNTAX:
+		status = STATUS_400_STR; break;
+	case ARC_ERR_NO_LENGTH:
+		status = STATUS_411_STR; break;
+	case ARC_ERR_UNSUPPORTED_HTTP_VER:
+		status = STATUS_505_STR; break;
+	case ARC_ERR_NOT_IMPLEMENTED:
+		status = STATUS_501_STR; break;
+	default:
+		status = STATUS_500_STR; break;
+	}
+
+	char response[1024];
+	int bytes = sprintf(response,
+		"HTTP/1.1 %s\r\n\r\n"
+		"<h1 style='color:red;text-align:center;border-bottom:1px solid red'>%s</h1>\r\n",
+		status, status
+	);
+	send(sock, response, bytes, 0);
 }

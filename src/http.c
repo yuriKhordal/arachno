@@ -20,15 +20,18 @@
 // TODO: SEND 400 BAD REQUEST OR 411 LENGTH REQUIRED ON ERRORS
 
 // First line of the request: METHOD /path?query
-int readRequestLine(char *line, struct http_request *request);
+int readRequestLine(char *line, http_request_t *request);
+int parseQString(char *qstr, http_query_t *query);
 int readRequestHeader(char *line, http_header_t *header, size_t n);
 ssize_t readAndCountHeaders(char **buffer, size_t *buffsize, ssize_t *msg_len, int clientsock);
-
-int strcmpi(const char *str1, const char *str2);
+int readBody(
+	http_request_t *request, char **buffer, size_t buffsize,
+	ssize_t msg_len, char *body, int clientsock
+);
 
 // ==================== Requset Functions ====================
 
-int readRequest(int clientsock, struct http_request *request) {
+int readRequest(int clientsock, http_request_t *request) {
 	int err;
 	// Initialize buffer.
 	size_t buffsize = REQUEST_BUFF_SIZE;
@@ -36,7 +39,7 @@ int readRequest(int clientsock, struct http_request *request) {
 	if (buffer == NULL) {
 		logf_errno("Failed to allocate buffer");
 		log_line();
-		return -1;
+		return ARC_ERR_ALLOC;
 	}
 	buffer[buffsize] = '\0';
 
@@ -46,7 +49,7 @@ int readRequest(int clientsock, struct http_request *request) {
 		logf_errno("Failed to recieve message");
 		log_line();
 		free(buffer);
-		return -1;
+		return ARC_ERR_SOCK;
 	}
 	buffer[msg_len] = '\0';
 
@@ -58,7 +61,7 @@ int readRequest(int clientsock, struct http_request *request) {
 		logf_warning("Invalid request syntax. Dropping connection.\n");
 		log_line();
 		free(buffer);
-		return -1;
+		return ARC_ERR_SYNTAX;
 	}
 
 	// Read and parse request line into `request` struct.
@@ -79,7 +82,7 @@ int readRequest(int clientsock, struct http_request *request) {
 		log_line();
 		free(buffer);
 		free(request->path);
-		if (request->query) free(request->query);
+		arcQueryDestroy(&request->query);
 		return (int)headCount;
 	}
 	
@@ -92,7 +95,7 @@ int readRequest(int clientsock, struct http_request *request) {
 			log_line();
 			free(buffer);
 			free(request->path);
-			if (request->query) free(request->query);
+			arcQueryDestroy(&request->query);
 			headerDestroy(&request->headers);
 			return err;
 		}
@@ -104,66 +107,77 @@ int readRequest(int clientsock, struct http_request *request) {
 	// =============== Body ===============
 
 	char *body = header + 2; // Skip the \r\n delimeter.
-	const char *contentLength = headerGetByName(&request->headers, "Content-Length");
-	if (contentLength) {
-		// TODO: Check validity of string before converting.
-		request->bodysize = atol(contentLength);
-	} else {
-		request->bodysize = 0;
+	err = readBody(request, &buffer, buffsize, msg_len, body, clientsock);
+	if (err < 0) {
+		log_line();
+		free(buffer);
+		free(request->path);
+		arcQueryDestroy(&request->query);
+		headerDestroy(&request->headers);
+		return err;
 	}
 
-	// Read Data.
-	if (request->bodysize > 0) {
-		size_t header_size = body - buffer;
-		size_t current_body_size = msg_len - header_size;
-		// If not all body has been read.
-		if (request->bodysize > current_body_size) {
-			size_t diff = request->bodysize - current_body_size;
-			buffsize += diff;
-			char * rbuff = realloc(buffer, (buffsize+1) * sizeof(char));
-			if (rbuff == NULL) {
-				logf_errno("Failed to reallocate buffer");
-				log_line();
-				free(buffer);
-				free(request->path);
-				if (request->query) free(request->query);
-				headerDestroy(&request->headers);
-				return -1;
-			}
-			buffer = rbuff;
-			ssize_t new_msg_len = recv(clientsock, buffer + msg_len, diff, 0);
-			if (new_msg_len == -1) {
-				logf_errno("Failed to recieve message");
-				log_line();
-				free(buffer);
-				free(request->path);
-				if (request->query) free(request->query);
-				headerDestroy(&request->headers);
-				return -1;
-			}
-			msg_len += new_msg_len;
-			buffer[msg_len] = '\0';
-		}
-
-		request->body = malloc(sizeof(char) * (request->bodysize + 1));
-		strncpy(request->body, body, request->bodysize);
-		request->body[request->bodysize] = '\0';
-	} else {
-		request->body = NULL;
-	}
+	// =============== Old Read Body ===============
+	// const char *contentLength = headerGetByName(&request->headers, "Content-Length");
+	// if (contentLength) {
+	// 	// TODO: Check validity of string before converting.
+	// 	request->bodysize = atol(contentLength);
+	// } else {
+	// 	request->bodysize = 0;
+	// }
+	//
+	// // Read Data.
+	// if (request->bodysize > 0) {
+	// 	size_t header_size = body - buffer;
+	// 	size_t current_body_size = msg_len - header_size;
+	// 	// If not all body has been read.
+	// 	if (request->bodysize > current_body_size) {
+	// 		size_t diff = request->bodysize - current_body_size;
+	// 		buffsize += diff;
+	// 		char * rbuff = realloc(buffer, (buffsize+1) * sizeof(char));
+	// 		if (rbuff == NULL) {
+	// 			logf_errno("Failed to reallocate buffer");
+	// 			log_line();
+	// 			free(buffer);
+	// 			free(request->path);
+	// 			if (request->query) free(request->query);
+	// 			headerDestroy(&request->headers);
+	// 			return -1;
+	// 		}
+	// 		buffer = rbuff;
+	// 		ssize_t new_msg_len = recv(clientsock, buffer + msg_len, diff, 0);
+	// 		if (new_msg_len == -1) {
+	// 			logf_errno("Failed to recieve message");
+	// 			log_line();
+	// 			free(buffer);
+	// 			free(request->path);
+	// 			if (request->query) free(request->query);
+	// 			headerDestroy(&request->headers);
+	// 			return -1;
+	// 		}
+	// 		msg_len += new_msg_len;
+	// 		buffer[msg_len] = '\0';
+	// 	}
+	//
+	// 	request->body = malloc(sizeof(char) * (request->bodysize + 1));
+	// 	strncpy(request->body, body, request->bodysize);
+	// 	request->body[request->bodysize] = '\0';
+	// } else {
+	// 	request->body = NULL;
+	// }
 
 	logf_debug("Data:\n%s\n", buffer);
 	free(buffer);
 	return 0;
 }
 
-int readRequestLine(char *line, struct http_request *request) {
+int readRequestLine(char *line, http_request_t *request) {
 	while (isspace(*line) && *line != '\0') line++;
 	if (*line == '\0') {
 		// Empty request line.
 		logf_warning("Empty request line!\nDropping connection.\n", line);
 		log_line();
-		return -1;
+		return ARC_ERR_SYNTAX;
 	}
 
 	size_t i;
@@ -190,7 +204,7 @@ int readRequestLine(char *line, struct http_request *request) {
 	} else {
 		logf_warning("Unknown method %*s. Dropping connection.\n", i, line);
 		log_line();
-		return -1;
+		return ARC_ERR_SYNTAX;
 	}
 
 	// Skip space
@@ -200,7 +214,7 @@ int readRequestLine(char *line, struct http_request *request) {
 		logf_warning("Invalid request line: Missing path."
 			"\n%s\nDropping connection.\n", line);
 		log_line();
-		return -1;
+		return ARC_ERR_SYNTAX;
 	}
 
 	// Path
@@ -211,75 +225,149 @@ int readRequestLine(char *line, struct http_request *request) {
 		logf_warning("Invalid request line: Missing HTTP version.\n"
 			"%s\nDropping connection.\n", line);
 		log_line();
-		return -1;
+		return ARC_ERR_SYNTAX;
 	}
 	request->path_len = i;
 	request->path = malloc(sizeof(char) * (i + 1));
 	if (request->path == NULL) {
 		logf_errno("Failed to allocate path string");
 		log_line();
-		return -1;
+		return ARC_ERR_ALLOC;
 	}
 	strncpy(request->path, path, i);
 	request->path[i] = '\0';
 
 	// Query String
-	if (path[i] == '?') {
-		i++;
-		char *query = path + i;
-		for (i = 0; !isspace(query[i]) && query[i] != '\0'; i++) {}
-		request->query_len = i;
-		request->query = malloc(sizeof(char) * (i + 1));
-		if (request->query == NULL) {
-			logf_errno("Failed to allocate query string");
-			log_line();
-			free(request->path);
-			return -1;
-		}
-		strncpy(request->query, query, i);
-		request->query[i] = '\0';
-	} else {
-		request->query = NULL;
-		request->query_len = 0;
+	// char *query = path + i;
+	// i = 0;
+	// if (query[0] == '?') {
+	// 	query++;
+	// 	// for (i = 0; !isspace(query[i]) && query[i] != '\0'; i++) {}
+	// 	while (!isspace(query[i]) && query[i] != '\0') i++;
+	// 	request->query_len = i;
+	// 	request->query = malloc(sizeof(char) * (i + 1));
+	// 	if (request->query == NULL) {
+	// 		logf_errno("Failed to allocate query string");
+	// 		log_line();
+	// 		free(request->path);
+	// 		return ARC_ERR_ALLOC;
+	// 	}
+	// 	strncpy(request->query, query, i);
+	// 	request->query[i] = '\0';
+	// } else {
+	// 	request->query = NULL;
+	// 	request->query_len = 0;
+	// }
+	char *query = path + i;
+	int err = parseQString(query, &request->query);
+	if (err < 0) {
+		log_line();
+		free(request->path);
+		return err;
 	}
 
-	while (isspace(path[i]) && path[i] != '\0') i++;
-	if (path[i] == '\0') {
+	// HTTP Version
+	char *version = query + request->query.str_len;
+	if (request->query.str_len > 0) version++; // +1 for the '?'
+	while (isspace(*version) && *version != '\0') version++;
+	if (*version == '\0') {
 		// Missing http version.
 		logf_warning("Invalid request line: Missing HTTP version.\n"
 			"%s\nDropping connection.\n", line);
 		log_line();
 		free(request->path);
-		if (request->query) free(request->query);
-		return -1;
+		arcQueryDestroy(&request->query);
+		return ARC_ERR_SYNTAX;
 	}
 	
-	char *version = path + i;
-	// HTTP/Version
 	if (strncmp(version, "HTTP/1.0", sizeof("HTTP/1.0")) == 0) {
 		request->version = HTTP_10;
 	} else if (strncmp(version, "HTTP/1.1", sizeof("HTTP/1.1")) == 0) {
 		request->version = HTTP_11;
 	} else if (strncmp(version, "HTTP/2", sizeof("HTTP/2")) == 0) {
 		request->version = HTTP_2;
-		logf_warning("HTTP/2 requests are unsupported. Dropping connection.\n", line);
+		logf_warning("HTTP/2 requests are unsupported.\n"
+			"%s\nDropping connection.\n", line);
 		log_line();
 		free(request->path);
-		if (request->query) free(request->query);
-		return -1;
+		arcQueryDestroy(&request->query);
+		return ARC_ERR_UNSUPPORTED_HTTP_VER;
 	} else if (strncmp(version, "HTTP/3", sizeof("HTTP/3")) == 0) {
 		request->version = HTTP_3;
-		logf_warning("HTTP/3 requests are unsupported. Dropping connection.\n", line);
+		logf_warning("HTTP/3 requests are unsupported.\n"
+			"%s\nDropping connection.\n", line);
 		log_line();
 		free(request->path);
-		if (request->query) free(request->query);
-		return -1;
+		arcQueryDestroy(&request->query);
+		return ARC_ERR_UNSUPPORTED_HTTP_VER;
 	} else {
-		logf_warning("Unknown http version: %s. Dropping connection.\n", version);
+		logf_warning("Unknown http version: %s.\n"
+			"%s\nDropping connection.\n", version, line);
 		log_line();
 		free(request->path);
-		if (request->query) free(request->query);
-		return -1;
+		arcQueryDestroy(&request->query);
+		return ARC_ERR_SYNTAX;
+	}
+
+	return 0;
+}
+
+int parseQString(char *qstr, http_query_t *query) {
+	// No query string
+	if (qstr[0] != '?') {
+		return 0;
+	}
+	// Empty query
+	if (isspace(qstr[1]) || qstr[1] == '\0') {
+		logf_warning("%s: Bad query string syntax: Nothing after '?'.\n"
+			"Query: %s.\n", __func__, qstr);
+		log_line();
+		return ARC_ERR_SYNTAX;
+	}
+
+	// Allocate and copy query string:
+	size_t len;
+	for (len = 0; !isspace(qstr[len]) && qstr[len] != '\0'; len++) {}
+	query->str_len = len;
+	query->str = malloc(sizeof(char) * (len + 1));
+	if (query->str == NULL) {
+		logf_errno("%s: Failed to allocate query string", __func__);
+		log_line();
+		return ARC_ERR_ALLOC;
+	}
+	strncpy(query->str, qstr, len);
+	query->str[len] = '\0';
+
+	// Parse query string
+	char* param = strtok_nd(query->str + 1, "&");
+	while (param != NULL) {
+		char *key = param;
+		char *value = strchr(param, '=');
+		
+		//error
+		if (value == NULL) {
+			logf_warning("%s: Bad query string syntax: Missing '=' for param %s.\n"
+			"Query: %s.\n", __func__, key, query->str);
+			log_line();
+			free(query->str);
+			arcMapDestroy(&query->params);
+			return ARC_ERR_SYNTAX;
+		}
+
+		// Split key and value into "two" strings.
+		*(value++) = '\0';
+		// error
+		int err = arcMapPut(&query->params, key, value);
+		if (err < 0) {
+			log_line();
+			free(query->str);
+			arcMapDestroy(&query->params);
+			return err;
+		} 
+
+		// Return string to original state and go to next param
+		*(--value) = '=';
+		param = strtok_nd(NULL, "&");
 	}
 
 	return 0;
@@ -295,7 +383,7 @@ int readRequestHeader(char *line, http_header_t *header, size_t n) {
 			"Missing ':', dropping connection.\n", line
 		);
 		log_line();
-		return -1;
+		return ARC_ERR_SYNTAX;
 	}
 	
 	size_t field_len = sep - field;
@@ -305,7 +393,7 @@ int readRequestHeader(char *line, http_header_t *header, size_t n) {
 			"Empty field name, dropping connection.\n", line
 		);
 		log_line();
-		return -1;
+		return ARC_ERR_SYNTAX;
 	}
 	
 	char *value = sep + 1;
@@ -317,7 +405,7 @@ int readRequestHeader(char *line, http_header_t *header, size_t n) {
 			"Empty field value, dropping connection.\n", line
 		);
 		log_line();
-		return -1;
+		return ARC_ERR_SYNTAX;
 	}
 
 	char ftmp = field[field_len];
@@ -350,7 +438,7 @@ ssize_t readAndCountHeaders(char **buffer, size_t *buffsize, ssize_t *msg_len, i
 			if (rbuffer == NULL) {
 				logf_errno("Failed to reallocate buffer");
 				log_line();
-				return -1;
+				return ARC_ERR_ALLOC;
 			}
 			*buffer = rbuffer;
 			(*buffer)[*buffsize] = '\0';
@@ -358,7 +446,7 @@ ssize_t readAndCountHeaders(char **buffer, size_t *buffsize, ssize_t *msg_len, i
 			if (new_msg_len == - 1) {
 				logf_errno("Failed to recieve message");
 				log_line();
-				return -1;
+				return ARC_ERR_SOCK;
 			}
 			*msg_len += new_msg_len;
 			(*buffer)[*msg_len] = '\0';
@@ -376,13 +464,93 @@ ssize_t readAndCountHeaders(char **buffer, size_t *buffsize, ssize_t *msg_len, i
 	return count;
 }
 
-int readData() {
+int readBody(
+	http_request_t *request, char **buffer, size_t buffsize,
+ssize_t msg_len, char *body, int clientsock) {
+	const char *contentLength = headerGetByName(&request->headers, "Content-Length");
+	if (contentLength) {
+		// TODO: Check validity of string before converting.
+		request->bodysize = atol(contentLength);
+	} else {
+		request->bodysize = 0;
+	}
 
+	// Read Data.
+	if (request->bodysize > 0) {
+		size_t header_size = body - *buffer;
+		size_t current_body_size = msg_len - header_size;
+		// If not all body has been read.
+		if (request->bodysize > current_body_size) {
+			size_t diff = request->bodysize - current_body_size;
+			buffsize += diff;
+			char * rbuff = realloc(*buffer, (buffsize+1) * sizeof(char));
+			if (rbuff == NULL) {
+				logf_errno("%s: Failed to reallocate buffer", __func__);
+				log_line();
+				return ARC_ERR_ALLOC;
+			}
+			*buffer = rbuff;
+			ssize_t new_msg_len = recv(clientsock, *buffer + msg_len, diff, 0);
+			if (new_msg_len == -1) {
+				logf_errno("%s: Failed to recieve message", __func__);
+				log_line();
+				return ARC_ERR_SOCK;
+			}
+			msg_len += new_msg_len;
+			(*buffer)[msg_len] = '\0';
+		}
+
+		request->body = malloc(sizeof(char) * (request->bodysize + 1));
+		if (request->body == NULL) {
+			logf_errno("%s: Failed to allocate body", __func__);
+			log_line();
+			return ARC_ERR_ALLOC;
+		}
+		strncpy(request->body, body, request->bodysize);
+		request->body[request->bodysize] = '\0';
+	} else {
+		request->body = NULL;
+	}
+
+	return 0;
+}
+
+// ==================== Misc ====================
+
+void arcQueryDestroy(http_query_t *query) {
+	if (query->str_len > 0) {
+		free(query->str);
+		arcMapDestroy(&query->params);
+	}
+}
+
+void requestInit(http_request_t *request) {
+	request->body = NULL;
+	request->bodysize = 0;
+	arcMapInit(&request->headers);
+	request->method = HTTP_GET;
+	request->path = NULL;
+	request->path_len = 0;
+	arcMapInit(&request->query.params);
+	request->query.str = NULL;
+	request->query.str_len = 0;
+	request->version = HTTP_10;
+}
+
+void requestDestroy(http_request_t *request) {
+	if (request->body)
+		free(request->body);
+	arcMapDestroy(&request->headers);
+	if (request->path)
+		free(request->path);
+	if (request->query.str)
+		free(request->query.str);
+	arcMapDestroy(&request->query.params);
 }
 
 // ==================== Legacy Functions ====================
 
-void handleRequest(int clntsock, const struct http_request *req) {
+void handleRequest(int clntsock, const http_request_t *req) {
 	// Resolve path.
 	char path[cfg_base_path_len + req->path_len + cfg_default_index_len + 1];
 	if (resolvePath(path, req->path) == NULL) {
