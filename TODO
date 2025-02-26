@@ -8,3 +8,4 @@
  - Add remove to token_map.
  - ? Add modes to the map, so it can behave in one way when being an HTTP Headers map(e.g. Keys being case irrelevant) and different ways in other maps.
  - Since map is no longer used just for headers, consider changing implementation to a sorted or hashed map.
+ - Use strcasecmp for arc_token_map.

@@ -16,162 +16,139 @@
 #include "misc.h"
 #include "logger.h"
 #include "errors.h"
+#include "strbuff.h"
 
 // TODO: SEND 400 BAD REQUEST OR 411 LENGTH REQUIRED ON ERRORS
 
 // First line of the request: METHOD /path?query
-int readRequestLine(char *line, http_request_t *request);
+int recvRequestLine(int sock, arc_str_buffer_t *req, size_t *headerIndex);
+int parseRequestLine(char *line, http_request_t *request);
 int parseQString(char *qstr, http_query_t *query);
-int readRequestHeader(char *line, http_header_t *header, size_t n);
-ssize_t readAndCountHeaders(char **buffer, size_t *buffsize, ssize_t *msg_len, int clientsock);
-int readBody(
-	http_request_t *request, char **buffer, size_t buffsize,
-	ssize_t msg_len, char *body, int clientsock
-);
+int recvHeaders(int sock, arc_str_buffer_t *req, size_t *bodyIndex);
+int parseHeaders(char *headerStr, arc_token_map_t *headerMap);
+int readRequestHeader(char *line, http_header_t *header);
+int recvBody(int sock, arc_str_buffer_t *req, size_t read, size_t contentLength);
 
-// ==================== Requset Functions ====================
+size_t getContentLength(const arc_token_map_t *headers);
+
+// ==================== Requset ====================
 
 int readRequest(int clientsock, http_request_t *request) {
-	int err;
-	// Initialize buffer.
-	size_t buffsize = REQUEST_BUFF_SIZE;
-	char *buffer = malloc(sizeof(char) * (buffsize + 1));
-	if (buffer == NULL) {
-		logf_errno("Failed to allocate buffer");
+	// =============== Initialize buffers ===============
+	arc_str_buffer_t reqBuff;
+	int err = arcStrBuffInit(&reqBuff, REQUEST_BUFF_SIZE-1);
+	if (err != ARC_NO_ERRORS) {
 		log_line();
-		return ARC_ERR_ALLOC;
-	}
-	buffer[buffsize] = '\0';
-
-	// Recieve message.
-	ssize_t msg_len = recv(clientsock, buffer, buffsize, 0);
-	if (msg_len == -1) {
-		logf_errno("Failed to recieve message");
-		log_line();
-		free(buffer);
-		return ARC_ERR_SOCK;
-	}
-	buffer[msg_len] = '\0';
-
-	// =============== Request Line ===============
-	// Find the end of the request line.
-	char *lineend = strstr(buffer, "\r\n");
-	if (lineend == NULL) {
-		// No end of line or line too long.
-		logf_warning("Invalid request syntax. Dropping connection.\n");
-		log_line();
-		free(buffer);
-		return ARC_ERR_SYNTAX;
-	}
-
-	// Read and parse request line into `request` struct.
-	*lineend = '\0';
-	if ((err = readRequestLine(buffer, request)) < 0) {
-		log_line();
-		free(buffer);
 		return err;
 	}
-	*lineend = '\r';
+	
+	// =============== Request Line ===============
+	size_t headerIndex = 0;
+	err = recvRequestLine(clientsock, &reqBuff, &headerIndex);
+	if (err != ARC_NO_ERRORS) {
+		log_line();
+		arcStrBuffDestroy(&reqBuff);
+		return err;
+	}
+
+	reqBuff.buffer[headerIndex-2] = '\0';
+	err = parseRequestLine(reqBuff.buffer, request);
+	if (err != ARC_NO_ERRORS) {
+		log_line();
+		arcStrBuffDestroy(&reqBuff);
+		return err;
+	}
+	reqBuff.buffer[headerIndex-2] = '\r';
 
 	// =============== Headers ===============
-
-	// Recieve all header fields and count them
-	// But don't read/save them yet, only count
-	ssize_t headCount = readAndCountHeaders(&buffer, &buffsize, &msg_len, clientsock);
-	if (headCount < 0) {
+	size_t bodyIndex = 0;
+	err = recvHeaders(clientsock, &reqBuff, &bodyIndex);
+	if (err != ARC_NO_ERRORS) {
 		log_line();
-		free(buffer);
+		arcStrBuffDestroy(&reqBuff);
 		free(request->path);
 		arcQueryDestroy(&request->query);
-		return (int)headCount;
+		return err;
 	}
-	
-	// Fill header list:
-	char *header = lineend + 2;
-	for (int i = 0; i < headCount; i++) {
-		char *end = strstr(header, "\r\n");
-		*end = '\0';
-		if ((err = readRequestHeader(header, &request->headers, i)) < 0) {
-			log_line();
-			free(buffer);
-			free(request->path);
-			arcQueryDestroy(&request->query);
-			headerDestroy(&request->headers);
-			return err;
-		}
-		*end = '\r';
-		
-		header = end + 2;
+
+	reqBuff.buffer[bodyIndex-4] = '\0';
+	err = parseHeaders(reqBuff.buffer + headerIndex, &request->headers);
+	if (err != ARC_NO_ERRORS) {
+		log_line();
+		arcStrBuffDestroy(&reqBuff);
+		free(request->path);
+		arcQueryDestroy(&request->query);
+		return err;
 	}
+	reqBuff.buffer[bodyIndex-4] = '\r';
 
 	// =============== Body ===============
 
-	char *body = header + 2; // Skip the \r\n delimeter.
-	err = readBody(request, &buffer, buffsize, msg_len, body, clientsock);
-	if (err < 0) {
+	size_t contentLength = getContentLength(&request->headers);
+	size_t read = reqBuff.len - bodyIndex;
+	err = recvBody(clientsock, &reqBuff, read, contentLength);
+	if (err != ARC_NO_ERRORS) {
 		log_line();
-		free(buffer);
+		arcStrBuffDestroy(&reqBuff);
 		free(request->path);
 		arcQueryDestroy(&request->query);
-		headerDestroy(&request->headers);
+		arcMapDestroy(&request->headers);
 		return err;
 	}
 
-	// =============== Old Read Body ===============
-	// const char *contentLength = headerGetByName(&request->headers, "Content-Length");
-	// if (contentLength) {
-	// 	// TODO: Check validity of string before converting.
-	// 	request->bodysize = atol(contentLength);
-	// } else {
-	// 	request->bodysize = 0;
-	// }
-	//
-	// // Read Data.
-	// if (request->bodysize > 0) {
-	// 	size_t header_size = body - buffer;
-	// 	size_t current_body_size = msg_len - header_size;
-	// 	// If not all body has been read.
-	// 	if (request->bodysize > current_body_size) {
-	// 		size_t diff = request->bodysize - current_body_size;
-	// 		buffsize += diff;
-	// 		char * rbuff = realloc(buffer, (buffsize+1) * sizeof(char));
-	// 		if (rbuff == NULL) {
-	// 			logf_errno("Failed to reallocate buffer");
-	// 			log_line();
-	// 			free(buffer);
-	// 			free(request->path);
-	// 			if (request->query) free(request->query);
-	// 			headerDestroy(&request->headers);
-	// 			return -1;
-	// 		}
-	// 		buffer = rbuff;
-	// 		ssize_t new_msg_len = recv(clientsock, buffer + msg_len, diff, 0);
-	// 		if (new_msg_len == -1) {
-	// 			logf_errno("Failed to recieve message");
-	// 			log_line();
-	// 			free(buffer);
-	// 			free(request->path);
-	// 			if (request->query) free(request->query);
-	// 			headerDestroy(&request->headers);
-	// 			return -1;
-	// 		}
-	// 		msg_len += new_msg_len;
-	// 		buffer[msg_len] = '\0';
-	// 	}
-	//
-	// 	request->body = malloc(sizeof(char) * (request->bodysize + 1));
-	// 	strncpy(request->body, body, request->bodysize);
-	// 	request->body[request->bodysize] = '\0';
-	// } else {
-	// 	request->body = NULL;
-	// }
+	char *body;
+	if (contentLength > 0) {
+		body = arcStrBuffSubstr(&reqBuff, bodyIndex, contentLength);
+		if (body == NULL) {
+			log_line();
+			return ARC_ERR_ALLOC;
+		}
+	} else {
+		body = NULL;
+	}
+	
+	request->body = body;
+	request->bodysize = contentLength;
 
-	logf_debug("Data:\n%s\n", buffer);
-	free(buffer);
-	return 0;
+	logf_debug("Data:\n%s\n", reqBuff.buffer);
+	arcStrBuffDestroy(&reqBuff);
+	return ARC_NO_ERRORS;
 }
 
-int readRequestLine(char *line, http_request_t *request) {
+// ==================== Requset Helpers ====================
+
+int recvRequestLine(int sock, arc_str_buffer_t *req, size_t *headerIndex) {
+	char buff[REQUEST_BUFF_SIZE];
+	int err;
+
+	size_t index = 0;
+	while (index == 0) {
+		ssize_t len = recv(sock, buff, REQUEST_BUFF_SIZE-1, 0);
+		if (len == -1) {
+			logf_errno("%s: Failed to recieve message", __func__);
+			log_line();
+			return ARC_ERR_SOCK;
+		}
+		buff[len] = '\0';
+
+		err = arcStrBuffAppend(req, buff);
+		if (err != ARC_NO_ERRORS) {
+			log_line();
+			arcStrBuffDestroy(req);
+			return err;
+		}
+
+		char *header = strstr(req->buffer, "\r\n");
+		if (header != NULL) {
+			index = header + 2 - req->buffer;
+		}
+	}
+
+	*headerIndex = index;
+	return ARC_NO_ERRORS;
+}
+
+int parseRequestLine(char *line, http_request_t *request) {
 	while (isspace(*line) && *line != '\0') line++;
 	if (*line == '\0') {
 		// Empty request line.
@@ -373,7 +350,74 @@ int parseQString(char *qstr, http_query_t *query) {
 	return 0;
 }
 
-int readRequestHeader(char *line, http_header_t *header, size_t n) {
+int recvHeaders(int sock, arc_str_buffer_t *req, size_t *bodyIndex) {
+	// Check if headers are already recieved from previous recieves:
+	char *check = strstr(req->buffer, "\r\n\r\n");
+	if (check != NULL) {
+		*bodyIndex = check + 4 - req->buffer;
+		return ARC_NO_ERRORS;
+	}
+
+	char buff[REQUEST_BUFF_SIZE];
+	int err;
+
+	size_t index = 0;
+	while (index == 0) {
+		ssize_t len = recv(sock, buff, REQUEST_BUFF_SIZE-1, 0);
+		if (len == -1) {
+			logf_errno("%s: Failed to recieve message", __func__);
+			log_line();
+			return ARC_ERR_SOCK;
+		}
+		buff[len] = '\0';
+
+		err = arcStrBuffAppend(req, buff);
+		if (err != ARC_NO_ERRORS) {
+			log_line();
+			return err;
+		}
+
+		/* Where to start the next search: instead of searching the entire buff
+		 * every time, only search in the last `len` bytes read from the client,
+		 * minus 4 bytes in case the \r\n\r\n was cut in the middle by the
+		 * previous recieve.
+		*/
+		char *next = req->buffer + req->len - len - 4;
+		char *body = strstr(next, "\r\n\r\n");
+		if (body != NULL) {
+			index = body + 4 - req->buffer;
+		}
+	}
+
+	*bodyIndex = index;
+	return ARC_NO_ERRORS;
+}
+
+int parseHeaders(char *headerStr, arc_token_map_t *headerMap) {
+	arcMapInit(headerMap);
+	char *headerLine = headerStr;
+	char *next = strstr(headerStr, "\r\n");
+	while (headerLine != NULL) {
+		if (next != NULL) *next = '\0';
+
+		int err = readRequestHeader(headerLine, headerMap);
+		if (err != ARC_NO_ERRORS) {
+			log_line();
+			arcMapDestroy(headerMap);
+			return err;
+		}
+
+		headerLine = next;
+		if (next != NULL) {
+			*next = '\r';
+			next = strstr(next + 2, "\r\n");
+		}
+	}
+
+	return ARC_NO_ERRORS;
+}
+
+int readRequestHeader(char *line, http_header_t *header) {
 	char *field = line;
 	while (isspace(*field)) field++;
 
@@ -424,95 +468,42 @@ int readRequestHeader(char *line, http_header_t *header, size_t n) {
 	return 0;
 }
 
-ssize_t readAndCountHeaders(char **buffer, size_t *buffsize, ssize_t *msg_len, int clientsock) {
-	// Recieve all header fields and count them
-	// But don't read/save them yet, only count
-	ssize_t count = 0;
-	char *header = strstr(*buffer, "\r\n") + 2; // skip first line
-	while (1) {
-		char *temp = strstr(header, "\r\n");
-		// End of message, recieve next.
-		if (temp == NULL) {
-			*buffsize *= 2;
-			char *rbuffer = realloc(*buffer, sizeof(char) * (*buffsize + 1));
-			if (rbuffer == NULL) {
-				logf_errno("Failed to reallocate buffer");
-				log_line();
-				return ARC_ERR_ALLOC;
-			}
-			*buffer = rbuffer;
-			(*buffer)[*buffsize] = '\0';
-			ssize_t new_msg_len = recv(clientsock, buffer + *msg_len, *buffsize - *msg_len, 0);
-			if (new_msg_len == - 1) {
-				logf_errno("Failed to recieve message");
-				log_line();
-				return ARC_ERR_SOCK;
-			}
-			*msg_len += new_msg_len;
-			(*buffer)[*msg_len] = '\0';
-			continue;
-		}
-
-		// while (isspace(header[0]) && header[0] != '\r') header++;
-		if (header == temp) {
-			break;
-		}
-		header = temp + 2;
-		count++;
+int recvBody(int sock, arc_str_buffer_t *req, size_t read, size_t contentLength) {
+	// Nothing to read
+	if (read >= contentLength) {
+		return ARC_NO_ERRORS;
 	}
 
-	return count;
-}
+	size_t left = contentLength - read;
+	char buff[left+1];
+	int err;
 
-int readBody(
-	http_request_t *request, char **buffer, size_t buffsize,
-ssize_t msg_len, char *body, int clientsock) {
-	const char *contentLength = headerGetByName(&request->headers, "Content-Length");
-	if (contentLength) {
-		// TODO: Check validity of string before converting.
-		request->bodysize = atol(contentLength);
-	} else {
-		request->bodysize = 0;
+	err = arcStrBuffReserve(req, req->len + left);
+	if (err != ARC_NO_ERRORS) {
+		log_line();
+		return err;
 	}
 
-	// Read Data.
-	if (request->bodysize > 0) {
-		size_t header_size = body - *buffer;
-		size_t current_body_size = msg_len - header_size;
-		// If not all body has been read.
-		if (request->bodysize > current_body_size) {
-			size_t diff = request->bodysize - current_body_size;
-			buffsize += diff;
-			char * rbuff = realloc(*buffer, (buffsize+1) * sizeof(char));
-			if (rbuff == NULL) {
-				logf_errno("%s: Failed to reallocate buffer", __func__);
-				log_line();
-				return ARC_ERR_ALLOC;
-			}
-			*buffer = rbuff;
-			ssize_t new_msg_len = recv(clientsock, *buffer + msg_len, diff, 0);
-			if (new_msg_len == -1) {
-				logf_errno("%s: Failed to recieve message", __func__);
-				log_line();
-				return ARC_ERR_SOCK;
-			}
-			msg_len += new_msg_len;
-			(*buffer)[msg_len] = '\0';
-		}
-
-		request->body = malloc(sizeof(char) * (request->bodysize + 1));
-		if (request->body == NULL) {
-			logf_errno("%s: Failed to allocate body", __func__);
+	size_t size = 0;
+	while (size < left) {
+		ssize_t len = recv(sock, buff + size, left - size, 0);
+		if (len == -1) {
+			logf_errno("%s: Failed to recieve message", __func__);
 			log_line();
-			return ARC_ERR_ALLOC;
+			return ARC_ERR_SOCK;
 		}
-		strncpy(request->body, body, request->bodysize);
-		request->body[request->bodysize] = '\0';
-	} else {
-		request->body = NULL;
+		size += len;
 	}
 
-	return 0;
+	buff[left] = '\0';
+	err = arcStrBuffAppend(req, buff);
+	// Shouldn't error since memory is reserved
+	if (err != ARC_NO_ERRORS) {
+		log_line();
+		return err;
+	}
+
+	return ARC_NO_ERRORS;
 }
 
 // ==================== Misc ====================
@@ -546,6 +537,18 @@ void requestDestroy(http_request_t *request) {
 	if (request->query.str)
 		free(request->query.str);
 	arcMapDestroy(&request->query.params);
+}
+
+size_t getContentLength(const arc_token_map_t *headers) {
+	const char *contentLengthStr = arcMapGetByName(headers, "Content-Length");
+	size_t contentLength;
+	if (contentLengthStr == NULL) {
+		contentLength = 0;
+	} else {
+		contentLength = atol(contentLengthStr);
+	}
+
+	return contentLength;
 }
 
 // ==================== Legacy Functions ====================

@@ -12,6 +12,8 @@
 #define ARC_ERR_OTHER -50
 #define ARC_ERR_NOT_IMPLEMENTED -51
 
+#define ARC_NO_ERRORS 0
+
 #define ARC_CHECK_NULL(param, return_value) { \
 	if (param == NULL) { \
 		logf_error("%s: Argument "#param" was null.\n", __func__); \
