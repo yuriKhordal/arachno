@@ -138,7 +138,8 @@ int parseline(const char *line, size_t len, const char *path, size_t linecount) 
 	// Key without value.
 	if (end >= len) {
 		fprintf(stderr,
-			"[WARN] Missing `=` separator after '%*s'\n", end-start, line + start
+			"[WARN] Missing `=` separator after '%*s'\n",
+			(int)(end-start), line + start
 		);
 		fprintf(stderr, "\tFile: '%s' line %zu.\n", path, linecount);
 		perror_line();

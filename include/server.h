@@ -8,6 +8,7 @@
 
 struct http_request;
 struct http_response;
+struct htmlf_context;
 
 #define LISTEN_BACKLOG 1024
 
