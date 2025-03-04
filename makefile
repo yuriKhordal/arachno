@@ -8,12 +8,12 @@ OBJ = $(SRC:src/%.c=obj/%.o) #Object files
 DEP = $(SRC:src/%.c=deps/%.d) #Object files
 
 CC = gcc
-FLAGS = -DDEBUG -Wall -pedantic -g -lmagic -Iinclude
+FLAGS = -DDEBUG -Wall -pedantic -rdynamic -g -lmagic -Iinclude
 
 # ========== Rules ==========
-.PHONY: compile mkdir clean run test
+.PHONY: compile clean run test
 
-compile: mkdir $(BIN)
+compile: $(BIN)
 
 $(BIN): $(OBJ)
 	$(CC) $(OBJ) -o $(BIN) $(FLAGS)
@@ -28,9 +28,6 @@ deps/%.d: src/%.c
 
 output%.txt: input%.txt $(BIN)
 	$(BIN) > $@ 2>&1 < $<
-
-mkdir:
-	mkdir -p deps obj
 
 clean:
 	-rm -f $(BIN)

@@ -16,6 +16,10 @@
 #include<endian.h>
 #include<magic.h>
 #include<signal.h>
+#include<libgen.h>
+#include<dlfcn.h>
+#include<argp.h>
+#include<errno.h>
 
 #include "server.h"
 #include "http.h"
@@ -58,6 +62,7 @@ int staticFileHandler(int sock, const struct http_request *req);
 int tryExt(int sock, const struct http_request *req);
 int send404(int sock, const struct http_request *req);
 int initArachno();
+void destroyArachno();
 void sendError(int arcErr, int sock);
 
 struct {
@@ -69,19 +74,129 @@ struct {
 	size_t arr_size;
 } requestHandlers = {NULL, 0, 0};
 
+char *fofPath = NULL;
+
 _Atomic int stop = 0;
 void onCtrlC(int signal) {
-	printf("[INFO] Ctrl+C Recieved, Stopping.\n");
+	printf("[INFO] SIGINT(Ctrl+C) Recieved, Stopping.\n");
 	stop = 1;
 }
 
+typedef int (*init_func_t)(int argc, char *argv[]);
+typedef void (*destroy_func_t)();
+
+typedef struct args {
+	char *dir;
+	char *app_path;
+	
+	int app_argc;
+	char **app_argv;
+} args_t;
+
+error_t argp_opt(int key, char *value, struct argp_state *state);
+
+args_t parseArgs(int argc, char *argv[]) {
+	struct args args = {
+		.dir = NULL,
+		.app_argc = 0, .app_argv = NULL,
+		.app_path = NULL
+	};
+	struct argp_option options[] = {
+		{"dir", 'd', "directory", 0, "Specify the working directory for the app. Default is the directory of the app .so file", 0},
+		{ 0 }
+	};
+	struct argp argp = {
+		.options = options,
+		.parser = argp_opt,
+		.args_doc = "app",
+		.doc = "TODO: Add",
+		.children = NULL,
+		.help_filter = NULL,
+		.argp_domain = NULL
+	};
+
+	argp_parse(&argp, argc, argv, ARGP_IN_ORDER, NULL, &args);
+	return args;
+}
+
+error_t argp_opt(int key, char *value, struct argp_state *state) {
+	args_t *args = state->input;
+
+	// App argument, finish parsing.
+	if (key == ARGP_KEY_ARG) {
+		args->app_argc = state->argc - state->next + 1;
+		args->app_argv = state->argv + state->next - 1;
+		args->app_path = value;
+		state->next = state->argc;
+		return 0;
+	}
+	if (key == ARGP_KEY_NO_ARGS) {
+		fprintf(stderr, "%s: Missing app argument.\n", state->name);
+		argp_help(state->root_argp, stderr, ARGP_HELP_STD_ERR, state->name);
+		exit(1);
+	}
+
+	// --dir
+	if (key == 'd') {
+		args->dir = value;
+	}
+
+	return 0;
+}
+
 int main(int argc, char *argv[]) {
+	struct args args = parseArgs(argc, argv);
+
+	// Loading project .so:
+	void *lib;
+	init_func_t arachno_init;
+	init_func_t arachno_start;
+	destroy_func_t arachno_stop;
+	destroy_func_t arachno_destroy;
+
+	lib = dlopen(args.app_path, RTLD_LAZY | RTLD_GLOBAL);
+	if (lib == NULL) {
+		fprintf(stderr, "Couldn't open: %s\n", dlerror());
+		return EXIT_FAILURE;
+	}
+
+	arachno_start = dlsym(lib, "arachno_start");
+	if (arachno_start == NULL) {
+		fprintf(stderr, "[Warning] Couldn't load arachno_start: %s\n", dlerror());
+	}
+	arachno_init = dlsym(lib, "arachno_init");
+	arachno_stop = dlsym(lib, "arachno_stop");
+	arachno_destroy = dlsym(lib, "arachno_destroy");
+
+	// Change directory
+	if (args.dir) {
+		if (chdir(args.dir) == -1) {
+			fprintf(stderr, "arachno: Failed to change directory to '%s': ", args.dir);
+			perror("");
+			dlclose(lib);
+			return EXIT_FAILURE;
+		}
+	} else {
+		char dir[PATH_MAX];
+		char *res = realpath(args.app_path, dir);
+		if (res == NULL) {
+			fprintf(stderr, "arachno: Can't resolve '%s': ", args.app_path);
+			perror("");
+			dlclose(lib);
+			return EXIT_FAILURE;
+		}
+		chdir(dirname(dir));
+	}
+	
 	if (loadConfigs() == -1) log_line();
 	
-	// Setup logger.
-	setLogger(NULL, LOG_DEBUG, 1);
-
-	// TODO: Load pre-init method.
+	if (arachno_init) {
+		int res = arachno_init(argc, argv);
+		if (res != ARC_NO_ERRORS) {
+			logf_error("arachno_init failed with error code %d\n", res);
+			return EXIT_FAILURE;
+		}
+	}
 
 	if (initArachno() == -1) {
 		logf_error("Failed to initialize arachno.\n");
@@ -90,10 +205,18 @@ int main(int argc, char *argv[]) {
 	}
 	
 	// TODO: Load post-init method.
+	if (arachno_start) {
+		int res = arachno_start(argc, argv);
+		if (res != ARC_NO_ERRORS) {
+			logf_error("arachno_start failed with error code %d\n", res);
+			return EXIT_FAILURE;
+		}
+	}
+
 	// =============== TEMP===============
-	registerRequest(staticFileHandler);
-	registerRequest(tryExt);
-	registerRequest(send404);
+	// registerRequest(staticFileHandler);
+	// registerRequest(tryExt);
+	// registerRequest(send404);
 	// =============== TEMP===============
 
 	// Start listening to requests.
@@ -178,13 +301,14 @@ int main(int argc, char *argv[]) {
 		// if (pid == 0) return EXIT_SUCCESS; // Child
 	}
 
-	// Destroy/Free resources before exit
-	if (close(sockfd) == -1) {
-		logf_errno("[Error] close() failed???? Info");
-		log_line();
+	if (arachno_stop) {
+		arachno_stop();
 	}
-	magic_close(magicfd);
-	free(requestHandlers.arr);
+	destroyArachno();
+	if (arachno_destroy) {
+		arachno_destroy();
+	}
+	dlclose(lib);
 	return EXIT_SUCCESS;
 }
 
@@ -253,14 +377,23 @@ int initArachno() {
 	return SUCCESS;
 }
 
-// ==================== Request Handlers ====================
+void destroyArachno() {
+	if (close(sockfd) == -1) {
+		logf_errno("[Error] close() failed???? Info");
+		log_line();
+	}
+	magic_close(magicfd);
+	free(requestHandlers.arr);
+	if (fofPath) free(fofPath);
+}
 
+// ==================== Request Handlers ====================
 
 int registerRequest(on_request func) {
 	if (requestHandlers.count == requestHandlers.arr_size) {
 		on_request *temp = realloc(requestHandlers.arr, sizeof(on_request) * requestHandlers.arr_size * 2);
 		if (temp == NULL) {
-			return -1;
+			return ARC_ERR_ALLOC;
 		}
 		requestHandlers.arr = temp;
 		requestHandlers.arr_size *= 2;
@@ -284,11 +417,27 @@ void unregisterRequest(on_request func) {
 	);
 }
 
-/** Set up arachno to serve static files.
- * @return On success 0, and -1 on failure.
- */
 int serveStaticFiles() {
 	return registerRequest(staticFileHandler);
+}
+
+int set404Page(const char *path) {
+	char *temp = strdup(path);
+	if (temp == NULL) {
+		logf_errno("%s: Failed to allocate path string", __func__);
+		log_line();
+		return ARC_ERR_ALLOC;
+	}
+	
+	int err = registerRequest(send404);
+	if (err != ARC_NO_ERRORS) {
+		logf_errno("%s: Failed to register 404 handler", __func__);
+		log_line();
+		return err;
+	}
+	
+	fofPath = temp;
+	return ARC_NO_ERRORS;
 }
 
 int staticFileHandler(int sock, const struct http_request *req) {
@@ -335,49 +484,19 @@ int tryExt(int sock, const struct http_request *req) {
 }
 
 int send404(int sock, const struct http_request *req) {
-	char path[cfg_base_path_len + 20];
-	strcpy(path, cfg_base_path);
-	// TODO: Replace with provided 404 page.
-	strcpy(path + cfg_base_path_len, "/FoF.html");
+	char *path = resolvePath(NULL, fofPath);
+	if (path == NULL) {
+		return -1;
+	}
 
 	int err = serveFile(sock, path, NULL);
 	if (err < 0) {
 		log_line();
 	}
 
-	if (err == 0)
+	if (err == ARC_NO_ERRORS)
 		return 1;
 	return err;
-
-	// FILE *file = fopen(path, "r");
-	// if (file == NULL) {
-	// 	logf_errno("Failed to open '%s'", path);
-	// 	log_line();
-	// 	return -1;
-	// }
-
-	// struct stat st;
-	// stat(path, &st);
-
-	// time_t timer = time(NULL);
-	// struct tm tm = *gmtime(&timer);
-	// char hdate[30]; strftime(hdate, 30, "%a, %d %b %Y %T GMT", &tm);
-
-	// char response[200] = {0};
-	// size_t size = sprintf(response,
-	// 	"HTTP/1.1 "STATUS_404_STR"\r\n"
-	// 	"Content-Length: %ld\r\n"
-	// 	"Content-Type: text/html\r\n"
-	// 	"Date: %s\r\n"
-	// 	"Server: arachno\r\n"
-	// 	"\r\n", st.st_size, hdate
-	// );
-
-	// send(sock, response, size, 0);
-	// sendfile(sock, fileno(file), NULL, st.st_size);
-
-	// fclose(file);
-	// return 0;
 }
 
 // Rest

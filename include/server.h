@@ -34,9 +34,16 @@ extern int sockfd;
 // ==================== Functions ====================
 
 /** Set up arachno to serve static files.
- * @return On success 0, and -1 on failure.
+ * @return ARC_NO_ERRORS On success, a negative error code on failure.
  */
 int serveStaticFiles();
+
+/**
+ * Setup a request handler to handle 404 errors by serving the file at `path`.
+ * @param path A path to an html or htmlf file.
+ * @return ARC_NO_ERRORS On success, a negative error code on failure.
+ */
+int set404Page(const char *path);
 
 /** Register a new request handler.
  * On an incoming request, it will be passed over to the registered handlers
@@ -44,7 +51,7 @@ int serveStaticFiles();
  * dictate whether the request will be passed to the next handler or whether
  * the request will be considered as responded to.
  * @param func A function pointer to the handler.
- * @return On success 0, and -1 on failure.
+ * @return ARC_NO_ERRORS On success, a negative error code on failure.
  */
 int registerRequest(on_request func);
 
